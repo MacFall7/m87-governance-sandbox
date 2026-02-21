@@ -1,0 +1,194 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0a0a0f;
+  --surface: #12121a;
+  --border: #2a2a3a;
+  --text: #e0e0e8;
+  --text-dim: #8888a0;
+  --accent: #6366f1;
+  --red: #ef4444;
+  --orange: #f97316;
+  --yellow: #eab308;
+  --green: #22c55e;
+  --blue: #3b82f6;
+  --cyan: #06b6d4;
+}
+
+body {
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Status bar */
+.status-bar {
+  display: flex;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.status-bar .badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge.state-IDLE { background: var(--text-dim); color: var(--bg); }
+.badge.state-OPEN { background: var(--blue); color: white; }
+.badge.state-IN_PROGRESS { background: var(--cyan); color: var(--bg); }
+.badge.state-BLOCKED { background: var(--orange); color: var(--bg); }
+.badge.state-HALTED { background: var(--red); color: white; }
+.badge.state-CLOSED { background: var(--green); color: var(--bg); }
+
+.badge.mode-standard { background: var(--green); color: var(--bg); }
+.badge.mode-enhanced { background: var(--yellow); color: var(--bg); }
+.badge.mode-lockdown { background: var(--red); color: white; }
+
+.badge.risk-low { background: var(--green); color: var(--bg); }
+.badge.risk-medium { background: var(--yellow); color: var(--bg); }
+.badge.risk-high { background: var(--orange); color: var(--bg); }
+.badge.risk-critical { background: var(--red); color: white; }
+
+/* Column grid */
+.columns {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--border);
+  flex: 1;
+}
+
+.column {
+  background: var(--surface);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 300px;
+}
+
+.column h2 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+.column .item {
+  padding: 6px 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  font-size: 12px;
+  border-left: 3px solid var(--border);
+}
+
+.column .item.active {
+  border-left-color: var(--accent);
+}
+
+/* Bottom panels */
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  border-top: 2px solid var(--border);
+  max-height: 300px;
+}
+
+.panel {
+  background: var(--surface);
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.panel h3 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+/* Escalation feed */
+.escalation {
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.escalation.sev-low { background: #22c55e15; border-left: 3px solid var(--green); }
+.escalation.sev-medium { background: #eab30815; border-left: 3px solid var(--yellow); }
+.escalation.sev-high { background: #f9731615; border-left: 3px solid var(--orange); }
+.escalation.sev-critical { background: #ef444415; border-left: 3px solid var(--red); }
+
+/* Event log */
+.event-entry {
+  padding: 2px 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.event-entry .from { color: var(--cyan); }
+.event-entry .to { color: var(--accent); }
+
+/* Injection panel */
+.injection-select {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.injection-btn {
+  padding: 6px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.injection-btn:hover {
+  opacity: 0.9;
+}
+
+.injection-btn.reset {
+  background: var(--text-dim);
+  margin-left: 8px;
+}

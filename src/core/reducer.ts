@@ -131,9 +131,8 @@ export function governanceReducer(state: SystemState, event: Event): SystemState
   switch (event.type) {
     case "ARCHITECT_SET_RISK": {
       const nextRisk = event.payload.risk;
-      const riskEscalatedToHigh =
-        nextRisk === "high" && state.riskClass !== "high" && state.manifest != null;
-      if (riskEscalatedToHigh) {
+      const riskChanged = nextRisk !== state.riskClass && state.manifest != null;
+      if (riskChanged) {
         let next: SystemState = { ...state, riskClass: nextRisk, manifest: null, receipt: null, receiptBundlePresent: false };
         next = escalate(
           next,
@@ -187,7 +186,7 @@ export function governanceReducer(state: SystemState, event: Event): SystemState
         const next = escalate(state, "missing_governance_mode", "high", "No ticket present.");
         return pushEvent({ ...next, state: "OPEN" }, "RELAY", "ARCHITECT", "RELAY_VALIDATE_TICKET_FAIL");
       }
-      if (!state.mode) {
+      if (!state.mode || !state.ticket.governance_mode) {
         const next = escalate(state, "missing_governance_mode", "high", "Governance mode must be declared by ARCHITECT.");
         return pushEvent({ ...next, state: "OPEN" }, "RELAY", "ARCHITECT", "RELAY_VALIDATE_TICKET_FAIL");
       }
@@ -391,7 +390,10 @@ export function governanceReducer(state: SystemState, event: Event): SystemState
       return { ...next, state: "BLOCKED" };
     }
 
-    default:
-      return state;
+    default: {
+      const _exhaustive: never = event;
+      void _exhaustive;
+      return { ...state, state: "HALTED" };
+    }
   }
 }

@@ -16,8 +16,8 @@ export function App() {
       <div className="status-bar">
         <span style={{ fontWeight: 700, color: "var(--accent)" }}>M87 GOVERNANCE</span>
         <span className={`badge state-${state.state}`}>{state.state}</span>
-        <span className={`badge mode-${state.mode}`}>{state.mode}</span>
-        <span className={`badge risk-${state.riskClass}`}>{state.riskClass}</span>
+        <span className={`badge mode-${state.mode ?? "none"}`}>{state.mode ?? "—"}</span>
+        <span className={`badge risk-${state.riskClass ?? "none"}`}>{state.riskClass ?? "—"}</span>
         <span style={{ color: "var(--text-dim)", marginLeft: "auto" }}>
           Escalations: {state.escalations.length}
         </span>
@@ -43,7 +43,7 @@ export function App() {
           >
             {failureMatrix.map((entry) => (
               <option key={entry.id} value={entry.id}>
-                {entry.id}: {entry.name}
+                {entry.id}: {entry.injection}
               </option>
             ))}
           </select>
@@ -57,9 +57,9 @@ export function App() {
           </div>
           {failureMatrix.find(e => e.id === selectedInjection) && (
             <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-dim)" }}>
-              <div><strong>Trigger:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.expectedTrigger}</div>
-              <div><strong>Severity:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.expectedSeverity}</div>
-              <div><strong>Invariant:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.invariant}</div>
+              <div><strong>Expected:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.expected}</div>
+              <div><strong>Failure if:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.failure_if}</div>
+              <div><strong>Category:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.category}</div>
             </div>
           )}
         </div>
@@ -72,7 +72,7 @@ export function App() {
           )}
           {[...state.escalations].reverse().map((esc, i) => (
             <div key={i} className={`escalation sev-${esc.severity}`}>
-              <strong>[{esc.severity.toUpperCase()}]</strong> {esc.trigger}: {esc.message}
+              <strong>[{esc.severity.toUpperCase()}]</strong> {esc.trigger}: {esc.details}
             </div>
           ))}
         </div>
@@ -89,7 +89,7 @@ export function App() {
               {" → "}
               <span className="to">{evt.to}</span>
               {": "}
-              {evt.label}
+              {evt.event}
             </div>
           ))}
         </div>

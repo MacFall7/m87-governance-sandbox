@@ -42,9 +42,10 @@ export type EscalationSeverity =
   | "high"
   | "critical";
 
-// ─── Escalation Triggers ─────────────────────────────────────────────────────
+// ─── Escalation Triggers (20 canonical triggers) ────────────────────────────
 
 export type EscalationTrigger =
+  | "missing_artifact_definition"
   | "missing_ticket"
   | "forward_without_ticket"
   | "manifest_without_ticket"
@@ -57,7 +58,13 @@ export type EscalationTrigger =
   | "stride_cold_start_failed"
   | "close_without_artifacts"
   | "unknown_event_type"
-  | "role_boundary_violation";
+  | "role_boundary_violation"
+  | "mode_risk_mismatch"
+  | "translation_integrity_failure"
+  | "duplicate_ticket"
+  | "action_on_closed"
+  | "action_on_halted"
+  | "missed_commitment_threshold";
 
 // ─── Assertion Types ─────────────────────────────────────────────────────────
 
@@ -101,6 +108,7 @@ export interface Ticket {
   description: string;
   riskClass: RiskClass;
   createdBy: Role;
+  artifact_definition?: string;
 }
 
 // ─── Manifest ────────────────────────────────────────────────────────────────
@@ -109,6 +117,7 @@ export interface Manifest {
   ticketId: string;
   steps: string[];
   approvedBy: Role;
+  cold_start_required?: boolean;
 }
 
 // ─── Receipt ─────────────────────────────────────────────────────────────────
@@ -120,9 +129,19 @@ export interface Receipt {
   result: "success" | "failure";
 }
 
-// ─── Governance State ────────────────────────────────────────────────────────
+// ─── STRIDE Simulation State ─────────────────────────────────────────────────
 
-export interface GovernanceState {
+export interface StrideSimState {
+  spoofing: boolean;
+  tampering: boolean;
+  repudiation: boolean;
+  informationDisclosure: boolean;
+  denialOfService: boolean;
+}
+
+// ─── System State (canonical) ────────────────────────────────────────────────
+
+export interface SystemState {
   state: TicketState;
   mode: GovernanceMode;
   riskClass: RiskClass;
@@ -133,23 +152,53 @@ export interface GovernanceState {
   eventLog: EventLogEntry[];
   assertions: Assertion[];
   strideOnline: boolean;
+  strideSim: StrideSimState;
+  lastTranslationCompressed: boolean;
+  missedCommitments: number;
 }
 
-// ─── Events (Discriminated Union) ────────────────────────────────────────────
+// ─── Legacy alias ────────────────────────────────────────────────────────────
+
+export type GovernanceState = SystemState;
+
+// ─── Events (Discriminated Union — 16 canonical event types) ────────────────
 
 export type Event =
-  | { type: "SUBMIT_TICKET"; payload: { ticket: Ticket } }
-  | { type: "VALIDATE_TICKET"; payload: { ticketId: string; role: Role } }
-  | { type: "FORWARD_TICKET"; payload: { ticketId: string; from: Role; to: Role } }
-  | { type: "SUBMIT_MANIFEST"; payload: { manifest: Manifest } }
-  | { type: "EXECUTE"; payload: { ticketId: string; manifestTicketId: string; role: Role } }
-  | { type: "RETURN_RECEIPT"; payload: { receipt: Receipt } }
-  | { type: "CLOSE_TICKET"; payload: { ticketId: string; role: Role } }
+  | { type: "ARCHITECT_SUBMIT_TICKET"; payload: { ticket: Ticket } }
+  | { type: "RELAY_VALIDATE_TICKET" }
+  | { type: "RELAY_FORWARD_TICKET"; payload: { from: Role; to: Role } }
+  | { type: "ARCHITECT_SUBMIT_MANIFEST"; payload: { manifest: Manifest } }
+  | { type: "SPECIALIST_EXECUTE"; payload: { ticketId: string; manifestTicketId: string } }
+  | { type: "SPECIALIST_RETURN_RECEIPT"; payload: { receipt: Receipt } }
+  | { type: "ARCHITECT_CLOSE_TICKET" }
   | { type: "ARCHITECT_SET_MODE"; payload: { mode: GovernanceMode } }
   | { type: "STRIDE_COLD_START"; payload: { success: boolean } }
+  | { type: "STRIDE_RUN_SIM"; payload: { category: keyof StrideSimState; result: boolean } }
+  | { type: "RELAY_COMPRESS_TRANSLATION" }
+  | { type: "RELAY_DECOMPRESS_TRANSLATION" }
+  | { type: "SPECIALIST_REPORT_COMMITMENT"; payload: { met: boolean } }
+  | { type: "ARCHITECT_ESCALATE"; payload: { trigger: EscalationTrigger; severity: EscalationSeverity; message: string } }
+  | { type: "RELAY_CHECK_MODE_RISK" }
   | { type: "INJECT_FAULT"; payload: { injectionId: string } };
 
-// ─── Failure Matrix Entry ────────────────────────────────────────────────────
+// ─── Failure Case Spec (prose-based, canonical) ─────────────────────────────
+
+export interface FailureCaseSpec {
+  id: string;
+  injection: string;
+  expected: string;
+  failure_if: string;
+  category: "architect" | "relay" | "specialist" | "stride" | "cross";
+}
+
+// ─── Injection Definition (state mutator, canonical) ─────────────────────────
+
+export interface Injection {
+  id: string;
+  apply: (s: SystemState) => SystemState;
+}
+
+// ─── Legacy interfaces (kept for compatibility) ──────────────────────────────
 
 export interface FailureMatrixEntry {
   id: string;
@@ -160,17 +209,15 @@ export interface FailureMatrixEntry {
   invariant: string;
 }
 
-// ─── Injection Definition ────────────────────────────────────────────────────
-
 export interface InjectionDefinition {
   id: string;
   name: string;
-  apply: (state: GovernanceState) => GovernanceState;
+  apply: (state: SystemState) => SystemState;
 }
 
 // ─── Initial State Factory ───────────────────────────────────────────────────
 
-export function createInitialState(): GovernanceState {
+export function createInitialState(): SystemState {
   return {
     state: "IDLE",
     mode: "standard",
@@ -182,5 +229,14 @@ export function createInitialState(): GovernanceState {
     eventLog: [],
     assertions: [],
     strideOnline: false,
+    strideSim: {
+      spoofing: false,
+      tampering: false,
+      repudiation: false,
+      informationDisclosure: false,
+      denialOfService: false,
+    },
+    lastTranslationCompressed: false,
+    missedCommitments: 0,
   };
 }

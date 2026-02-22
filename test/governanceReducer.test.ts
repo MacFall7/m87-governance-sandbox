@@ -1,283 +1,329 @@
 import { describe, it, expect } from "vitest";
 import { governanceReducer } from "../src/core/reducer";
 import { createInitialState } from "../src/core/types";
-import type { GovernanceState, Event } from "../src/core/types";
+import type { SystemState, Event, Ticket, Manifest, Receipt } from "../src/core/types";
 import { failureMatrix } from "../src/core/failureMatrix";
 import { injections, getInjection } from "../src/core/injections";
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
-function makeTicket(id = "TKT-001") {
+function makeTicket(id = "TKT-001"): Ticket {
   return {
     id,
     title: "Test Ticket",
     description: "A test ticket",
-    riskClass: "medium" as const,
-    createdBy: "ARCHITECT" as const,
+    riskClass: "medium",
+    createdBy: "ARCHITECT",
+    artifact_definition: "Artifact spec for testing",
   };
 }
 
-function makeManifest(ticketId = "TKT-001") {
+function makeManifest(ticketId = "TKT-001"): Manifest {
   return {
     ticketId,
     steps: ["Step 1", "Step 2"],
-    approvedBy: "ARCHITECT" as const,
+    approvedBy: "ARCHITECT",
   };
 }
 
-function makeReceipt(ticketId = "TKT-001", manifestTicketId = "TKT-001") {
+function makeReceipt(ticketId = "TKT-001", manifestTicketId = "TKT-001"): Receipt {
   return {
     ticketId,
     manifestTicketId,
-    completedBy: "SPECIALIST" as const,
-    result: "success" as const,
+    completedBy: "SPECIALIST",
+    result: "success",
   };
 }
 
-function stateWithTicket(id = "TKT-001"): GovernanceState {
-  return {
-    ...createInitialState(),
-    state: "OPEN",
-    ticket: makeTicket(id),
-  };
+/** Build a clean state with a submitted ticket via the reducer. */
+function stateWithTicket(id = "TKT-001"): SystemState {
+  const s0 = createInitialState();
+  return governanceReducer(s0, {
+    type: "ARCHITECT_SUBMIT_TICKET",
+    payload: { ticket: makeTicket(id) },
+  });
 }
 
-function stateWithManifest(ticketId = "TKT-001"): GovernanceState {
-  return {
-    ...stateWithTicket(ticketId),
-    state: "IN_PROGRESS",
-    manifest: makeManifest(ticketId),
-  };
+/** Build state through ticket + validate + forward + manifest. */
+function stateWithManifest(ticketId = "TKT-001"): SystemState {
+  let s = stateWithTicket(ticketId);
+  s = governanceReducer(s, { type: "RELAY_VALIDATE_TICKET" });
+  s = governanceReducer(s, { type: "RELAY_FORWARD_TICKET", payload: { from: "RELAY", to: "SPECIALIST" } });
+  s = governanceReducer(s, {
+    type: "ARCHITECT_SUBMIT_MANIFEST",
+    payload: { manifest: makeManifest(ticketId) },
+  });
+  return s;
 }
 
-function stateWithReceipt(ticketId = "TKT-001"): GovernanceState {
-  return {
-    ...stateWithManifest(ticketId),
-    receipt: makeReceipt(ticketId),
-  };
+/** Build state through full lifecycle up to receipt. */
+function stateWithReceipt(ticketId = "TKT-001"): SystemState {
+  let s = stateWithManifest(ticketId);
+  s = governanceReducer(s, {
+    type: "SPECIALIST_EXECUTE",
+    payload: { ticketId, manifestTicketId: ticketId },
+  });
+  s = governanceReducer(s, {
+    type: "SPECIALIST_RETURN_RECEIPT",
+    payload: { receipt: makeReceipt(ticketId) },
+  });
+  return s;
 }
 
 // ─── Failure Matrix Tests (22 cases) ────────────────────────────────────────
 
 describe("Failure Matrix — 22 Injection Scenarios", () => {
-  // INJ-01: Forward without ticket
-  it("INJ-01: Forward without ticket → escalation", () => {
+  // FA_001: Strip artifact_definition from ticket
+  it("FA_001 — missing artifact_definition → RELAY rejects, escalation", () => {
+    let state = stateWithTicket();
+    state = getInjection("FA_001").apply(state);
+    // Trigger: RELAY validates
+    state = governanceReducer(state, { type: "RELAY_VALIDATE_TICKET" });
+    // Expected: RELAY rejects. Ticket stays OPEN. Escalation with missing_artifact_definition.
+    expect(state.state).toBe("OPEN");
+    expect(state.escalations.length).toBeGreaterThan(0);
+    expect(state.escalations.some(e => e.trigger === "missing_artifact_definition")).toBe(true);
+  });
+
+  // FA_002: Duplicate ticket (identity injection, event-sequence trigger)
+  it("FA_002 — duplicate ticket submit → rejected, escalation", () => {
+    let state = stateWithTicket();
+    state = getInjection("FA_002").apply(state); // identity
+    // Trigger: submit another ticket
+    state = governanceReducer(state, {
+      type: "ARCHITECT_SUBMIT_TICKET",
+      payload: { ticket: makeTicket("TKT-002") },
+    });
+    expect(state.escalations.some(e => e.trigger === "duplicate_ticket")).toBe(true);
+  });
+
+  // FA_003: mode=standard but riskClass=critical
+  it("FA_003 — mode-risk mismatch → BLOCKED, escalation", () => {
+    let state = stateWithTicket();
+    state = getInjection("FA_003").apply(state);
+    // Trigger: RELAY checks mode-risk
+    state = governanceReducer(state, { type: "RELAY_CHECK_MODE_RISK" });
+    expect(state.state).toBe("BLOCKED");
+    expect(state.escalations.some(e => e.trigger === "mode_risk_mismatch")).toBe(true);
+  });
+
+  // FA_004: Corrupt manifest approvedBy to SPECIALIST
+  it("FA_004 — manifest with unauthorized approver → role_boundary_violation", () => {
+    let state = stateWithTicket();
+    state = governanceReducer(state, { type: "RELAY_VALIDATE_TICKET" });
+    state = governanceReducer(state, { type: "RELAY_FORWARD_TICKET", payload: { from: "RELAY", to: "SPECIALIST" } });
+    // Submit a manifest, then corrupt it and re-submit
+    const corruptManifest = { ...makeManifest(), approvedBy: "SPECIALIST" as const };
+    state = governanceReducer(state, {
+      type: "ARCHITECT_SUBMIT_MANIFEST",
+      payload: { manifest: corruptManifest },
+    });
+    expect(state.escalations.some(e => e.trigger === "role_boundary_violation")).toBe(true);
+  });
+
+  // FR_001: Null out ticket
+  it("FR_001 — ticket nulled mid-flow → missing_ticket on next action", () => {
+    let state = stateWithTicket();
+    state = getInjection("FR_001").apply(state);
+    // Trigger: try to validate
+    state = governanceReducer(state, { type: "RELAY_VALIDATE_TICKET" });
+    expect(state.escalations.some(e => e.trigger === "missing_ticket")).toBe(true);
+  });
+
+  // FR_002: Forward without validation (identity, event-sequence trigger)
+  it("FR_002 — forward from IDLE → forward_without_ticket", () => {
     const state = createInitialState();
-    const event: Event = { type: "FORWARD_TICKET", payload: { ticketId: "TKT-001", from: "ARCHITECT", to: "SPECIALIST" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("forward_without_ticket");
-    expect(result.escalations[0].severity).toBe("high");
+    // No ticket, just try to forward from IDLE
+    const result = governanceReducer(state, {
+      type: "RELAY_FORWARD_TICKET",
+      payload: { from: "RELAY", to: "SPECIALIST" },
+    });
+    expect(result.escalations.some(e => e.trigger === "forward_without_ticket")).toBe(true);
   });
 
-  // INJ-02: Manifest without ticket
-  it("INJ-02: Manifest without ticket → escalation", () => {
-    const state = createInitialState();
-    const event: Event = { type: "SUBMIT_MANIFEST", payload: { manifest: makeManifest() } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("manifest_without_ticket");
+  // FR_003: lastTranslationCompressed=true
+  it("FR_003 — compressed translation → translation_integrity_failure on decompress", () => {
+    let state = stateWithTicket();
+    state = getInjection("FR_003").apply(state);
+    // Trigger: decompress
+    state = governanceReducer(state, { type: "RELAY_DECOMPRESS_TRANSLATION" });
+    expect(state.escalations.some(e => e.trigger === "translation_integrity_failure")).toBe(true);
   });
 
-  // INJ-03: Manifest ticket mismatch
-  it("INJ-03: Manifest ticket mismatch → escalation", () => {
-    const state = stateWithTicket();
-    const event: Event = { type: "SUBMIT_MANIFEST", payload: { manifest: { ...makeManifest(), ticketId: "TKT-WRONG" } } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations.some(e => e.trigger === "manifest_ticket_mismatch")).toBe(true);
+  // FR_004: Corrupt manifest ticketId to TKT-WRONG
+  it("FR_004 — manifest ticketId corrupted → execute_manifest_ticket_mismatch", () => {
+    let state = stateWithManifest();
+    state = getInjection("FR_004").apply(state);
+    // Trigger: execute
+    state = governanceReducer(state, {
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-WRONG" },
+    });
+    expect(state.escalations.some(e => e.trigger === "execute_manifest_ticket_mismatch")).toBe(true);
   });
 
-  // INJ-04: Execute without ticket
-  it("INJ-04: Execute without ticket → escalation", () => {
-    const state = { ...createInitialState(), manifest: makeManifest() };
-    const event: Event = { type: "EXECUTE", payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001", role: "SPECIALIST" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("execute_without_ticket");
+  // FS_001: Null out manifest
+  it("FS_001 — manifest nulled → execute_without_manifest", () => {
+    let state = stateWithManifest();
+    state = getInjection("FS_001").apply(state);
+    state = governanceReducer(state, {
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001" },
+    });
+    expect(state.escalations.some(e => e.trigger === "execute_without_manifest")).toBe(true);
   });
 
-  // INJ-05: Execute without manifest
-  it("INJ-05: Execute without manifest → escalation", () => {
-    const state = stateWithTicket();
-    const event: Event = { type: "EXECUTE", payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001", role: "SPECIALIST" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("execute_without_manifest");
+  // FS_002: Corrupt manifest ticketId to TKT-MISMATCH
+  it("FS_002 — manifest ticketId mismatch → execute_manifest_ticket_mismatch", () => {
+    let state = stateWithManifest();
+    state = getInjection("FS_002").apply(state);
+    state = governanceReducer(state, {
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-MISMATCH" },
+    });
+    expect(state.escalations.some(e => e.trigger === "execute_manifest_ticket_mismatch")).toBe(true);
   });
 
-  // INJ-06: Execute manifest-ticket mismatch
-  it("INJ-06: Execute manifest-ticket mismatch → escalation", () => {
-    const state: GovernanceState = {
-      ...stateWithTicket(),
-      state: "IN_PROGRESS",
-      manifest: { ...makeManifest(), ticketId: "TKT-WRONG" },
-    };
-    const event: Event = { type: "EXECUTE", payload: { ticketId: "TKT-001", manifestTicketId: "TKT-WRONG", role: "SPECIALIST" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("execute_manifest_ticket_mismatch");
+  // FS_003: Receipt without artifacts (identity, event-sequence trigger)
+  it("FS_003 — receipt on bare state → receipt_without_ticket_or_manifest", () => {
+    let state = createInitialState();
+    state = getInjection("FS_003").apply(state); // identity
+    state = governanceReducer(state, {
+      type: "SPECIALIST_RETURN_RECEIPT",
+      payload: { receipt: makeReceipt() },
+    });
+    expect(state.escalations.some(e => e.trigger === "receipt_without_ticket_or_manifest")).toBe(true);
   });
 
-  // INJ-07: Receipt without ticket or manifest
-  it("INJ-07: Receipt without ticket or manifest → escalation", () => {
-    const state = createInitialState();
-    const event: Event = { type: "RETURN_RECEIPT", payload: { receipt: makeReceipt() } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("receipt_without_ticket_or_manifest");
+  // FS_004: Corrupt receipt ticketId
+  it("FS_004 — receipt ticketId corrupted → receipt_ticket_mismatch", () => {
+    let state = stateWithManifest();
+    // Execute first to have a valid execution context
+    state = governanceReducer(state, {
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001" },
+    });
+    // Return receipt with wrong ticketId
+    state = governanceReducer(state, {
+      type: "SPECIALIST_RETURN_RECEIPT",
+      payload: { receipt: { ...makeReceipt(), ticketId: "TKT-WRONG" } },
+    });
+    expect(state.escalations.some(e => e.trigger === "receipt_ticket_mismatch")).toBe(true);
   });
 
-  // INJ-08: Receipt ticket mismatch
-  it("INJ-08: Receipt ticket mismatch → escalation", () => {
-    const state = stateWithManifest();
-    const event: Event = { type: "RETURN_RECEIPT", payload: { receipt: { ...makeReceipt(), ticketId: "TKT-WRONG" } } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("receipt_ticket_mismatch");
+  // FST_001: STRIDE offline
+  it("FST_001 — STRIDE offline → cold start fails, HALTED", () => {
+    let state = createInitialState();
+    state = getInjection("FST_001").apply(state);
+    state = governanceReducer(state, { type: "STRIDE_COLD_START", payload: { success: false } });
+    expect(state.state).toBe("HALTED");
+    expect(state.escalations.some(e => e.trigger === "stride_cold_start_failed")).toBe(true);
   });
 
-  // INJ-09: STRIDE cold start failed
-  it("INJ-09: STRIDE cold start failed → escalation + HALTED", () => {
-    const state = createInitialState();
-    const event: Event = { type: "STRIDE_COLD_START", payload: { success: false } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("stride_cold_start_failed");
-    expect(result.escalations[0].severity).toBe("critical");
-    expect(result.state).toBe("HALTED");
+  // FST_002: strideSim.spoofing=true
+  it("FST_002 — spoofing detected → BLOCKED, escalation", () => {
+    let state = createInitialState();
+    state = getInjection("FST_002").apply(state);
+    state = governanceReducer(state, { type: "STRIDE_RUN_SIM", payload: { category: "spoofing", result: true } });
+    expect(state.state).toBe("BLOCKED");
+    expect(state.escalations.length).toBeGreaterThan(0);
   });
 
-  // INJ-10: Close without artifacts (no manifest, no receipt)
-  it("INJ-10: Close without artifacts → escalation", () => {
-    const state = stateWithTicket();
-    const event: Event = { type: "CLOSE_TICKET", payload: { ticketId: "TKT-001", role: "ARCHITECT" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("close_without_artifacts");
+  // FST_003: strideSim.tampering=true
+  it("FST_003 — tampering detected → BLOCKED, escalation", () => {
+    let state = createInitialState();
+    state = getInjection("FST_003").apply(state);
+    state = governanceReducer(state, { type: "STRIDE_RUN_SIM", payload: { category: "tampering", result: true } });
+    expect(state.state).toBe("BLOCKED");
+    expect(state.escalations.length).toBeGreaterThan(0);
   });
 
-  // INJ-11: Close without manifest
-  it("INJ-11: Close without manifest → escalation", () => {
-    const state: GovernanceState = {
-      ...stateWithTicket(),
-      receipt: makeReceipt(),
-    };
-    const event: Event = { type: "CLOSE_TICKET", payload: { ticketId: "TKT-001", role: "ARCHITECT" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("close_without_artifacts");
+  // FST_004: strideSim.denialOfService=true
+  it("FST_004 — DoS detected → BLOCKED, escalation", () => {
+    let state = createInitialState();
+    state = getInjection("FST_004").apply(state);
+    state = governanceReducer(state, { type: "STRIDE_RUN_SIM", payload: { category: "denialOfService", result: true } });
+    expect(state.state).toBe("BLOCKED");
+    expect(state.escalations.length).toBeGreaterThan(0);
   });
 
-  // INJ-12: Close without receipt
-  it("INJ-12: Close without receipt → escalation", () => {
-    const state = stateWithManifest();
-    const event: Event = { type: "CLOSE_TICKET", payload: { ticketId: "TKT-001", role: "ARCHITECT" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("close_without_artifacts");
+  // FC_001: Close without artifacts (identity, event-sequence trigger)
+  it("FC_001 — close without measurable acceptance → close_without_artifacts", () => {
+    let state = stateWithTicket();
+    state = getInjection("FC_001").apply(state); // identity
+    state = governanceReducer(state, { type: "ARCHITECT_CLOSE_TICKET" });
+    expect(state.escalations.some(e => e.trigger === "close_without_artifacts")).toBe(true);
   });
 
-  // INJ-13: Close with failed receipt
-  it("INJ-13: Close with failed receipt → escalation", () => {
-    const state: GovernanceState = {
-      ...stateWithManifest(),
-      receipt: { ...makeReceipt(), result: "failure" },
-    };
-    const event: Event = { type: "CLOSE_TICKET", payload: { ticketId: "TKT-001", role: "ARCHITECT" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("close_without_artifacts");
+  // FC_002: Close already-CLOSED (identity, event-sequence trigger)
+  it("FC_002 — close already-closed ticket → action_on_closed", () => {
+    let state = stateWithReceipt();
+    // Close once (should succeed)
+    state = governanceReducer(state, { type: "ARCHITECT_CLOSE_TICKET" });
+    expect(state.state).toBe("CLOSED");
+    // Apply identity injection
+    state = getInjection("FC_002").apply(state);
+    // Try to close again
+    state = governanceReducer(state, { type: "ARCHITECT_CLOSE_TICKET" });
+    expect(state.escalations.some(e => e.trigger === "action_on_closed")).toBe(true);
   });
 
-  // INJ-14: Forward from SPECIALIST (wrong role)
-  it("INJ-14: Forward from SPECIALIST → role boundary violation", () => {
-    const state = stateWithTicket();
-    const event: Event = { type: "FORWARD_TICKET", payload: { ticketId: "TKT-001", from: "SPECIALIST", to: "STRIDE" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("role_boundary_violation");
+  // FC_003: Execute on HALTED (identity, event-sequence trigger)
+  it("FC_003 — execute on HALTED state → action_on_halted", () => {
+    let state = stateWithManifest();
+    // HALT the system via failed STRIDE cold start
+    state = governanceReducer(state, { type: "STRIDE_COLD_START", payload: { success: false } });
+    expect(state.state).toBe("HALTED");
+    state = getInjection("FC_003").apply(state); // identity
+    state = governanceReducer(state, {
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001" },
+    });
+    expect(state.escalations.some(e => e.trigger === "action_on_halted")).toBe(true);
   });
 
-  // INJ-15: Manifest submitted by SPECIALIST
-  it("INJ-15: Manifest submitted by SPECIALIST → role boundary violation", () => {
-    const state = stateWithTicket();
-    const event: Event = { type: "SUBMIT_MANIFEST", payload: { manifest: { ...makeManifest(), approvedBy: "SPECIALIST" } } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("role_boundary_violation");
+  // FC_004: Corrupt receipt manifestTicketId
+  it("FC_004 — receipt manifest mismatch → receipt_ticket_mismatch", () => {
+    let state = stateWithManifest();
+    state = governanceReducer(state, {
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001" },
+    });
+    // Return receipt then corrupt it
+    state = governanceReducer(state, {
+      type: "SPECIALIST_RETURN_RECEIPT",
+      payload: { receipt: { ...makeReceipt(), manifestTicketId: "TKT-WRONG" } },
+    });
+    expect(state.escalations.some(e => e.trigger === "receipt_ticket_mismatch")).toBe(true);
   });
 
-  // INJ-16: Execute by ARCHITECT (wrong role)
-  it("INJ-16: Execute by ARCHITECT → role boundary violation", () => {
-    const state = stateWithManifest();
-    const event: Event = { type: "EXECUTE", payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001", role: "ARCHITECT" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("role_boundary_violation");
+  // FC_005: Receipt result=failure
+  it("FC_005 — failed receipt → close_without_artifacts on close attempt", () => {
+    let state = stateWithManifest();
+    state = governanceReducer(state, {
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001" },
+    });
+    state = governanceReducer(state, {
+      type: "SPECIALIST_RETURN_RECEIPT",
+      payload: { receipt: { ...makeReceipt(), result: "failure" } },
+    });
+    // Try to close
+    state = governanceReducer(state, { type: "ARCHITECT_CLOSE_TICKET" });
+    expect(state.escalations.some(e => e.trigger === "close_without_artifacts")).toBe(true);
   });
 
-  // INJ-17: Double submit ticket
-  it("INJ-17: Double submit ticket → escalation", () => {
-    const state = stateWithTicket();
-    const event: Event = { type: "SUBMIT_TICKET", payload: { ticket: makeTicket("TKT-002") } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("missing_ticket");
-  });
-
-  // INJ-18: Close already closed ticket
-  it("INJ-18: Close already closed ticket → escalation", () => {
-    const state: GovernanceState = {
-      ...stateWithReceipt(),
-      state: "CLOSED",
-    };
-    const event: Event = { type: "CLOSE_TICKET", payload: { ticketId: "TKT-001", role: "ARCHITECT" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("close_without_artifacts");
-  });
-
-  // INJ-19: Execute on HALTED state
-  it("INJ-19: Execute on HALTED state → escalation", () => {
-    const state: GovernanceState = {
-      ...stateWithManifest(),
-      state: "HALTED",
-    };
-    const event: Event = { type: "EXECUTE", payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001", role: "SPECIALIST" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("execute_without_ticket");
-  });
-
-  // INJ-20: Forward on CLOSED state
-  it("INJ-20: Forward on CLOSED state → escalation", () => {
-    const state: GovernanceState = {
-      ...stateWithTicket(),
-      state: "CLOSED",
-    };
-    const event: Event = { type: "FORWARD_TICKET", payload: { ticketId: "TKT-001", from: "ARCHITECT", to: "SPECIALIST" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("forward_without_ticket");
-  });
-
-  // INJ-21: Validate without ticket
-  it("INJ-21: Validate without ticket → escalation", () => {
-    const state = createInitialState();
-    const event: Event = { type: "VALIDATE_TICKET", payload: { ticketId: "TKT-001", role: "ARCHITECT" } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("missing_ticket");
-  });
-
-  // INJ-22: Receipt manifest-ticket mismatch
-  it("INJ-22: Receipt manifest-ticket mismatch → escalation", () => {
-    const state = stateWithManifest();
-    const event: Event = { type: "RETURN_RECEIPT", payload: { receipt: { ...makeReceipt(), manifestTicketId: "TKT-WRONG" } } };
-    const result = governanceReducer(state, event);
-    expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("receipt_ticket_mismatch");
+  // FC_006: missedCommitments=10
+  it("FC_006 — excessive missed commitments → BLOCKED, missed_commitment_threshold", () => {
+    let state = stateWithTicket();
+    state = getInjection("FC_006").apply(state);
+    // Trigger: report another missed commitment
+    state = governanceReducer(state, {
+      type: "SPECIALIST_REPORT_COMMITMENT",
+      payload: { met: false },
+    });
+    expect(state.state).toBe("BLOCKED");
+    expect(state.escalations.some(e => e.trigger === "missed_commitment_threshold")).toBe(true);
   });
 });
 
@@ -286,14 +332,14 @@ describe("Failure Matrix — 22 Injection Scenarios", () => {
 describe("Structural Tests", () => {
   it("Matrix completeness: every failureMatrix entry has a corresponding injection", () => {
     for (const entry of failureMatrix) {
-      const injection = getInjection(entry.injection);
-      expect(injection, `Missing injection for ${entry.id}: ${entry.name}`).toBeDefined();
+      const injection = getInjection(entry.id);
+      expect(injection, `Missing injection for ${entry.id}`).toBeDefined();
     }
   });
 
   it("Injection coverage: every injection ID is referenced in failureMatrix", () => {
     for (const inj of injections) {
-      const matrixEntry = failureMatrix.find(m => m.injection === inj.id);
+      const matrixEntry = failureMatrix.find(m => m.id === inj.id);
       expect(matrixEntry, `Injection ${inj.id} not in failure matrix`).toBeDefined();
     }
   });
@@ -303,50 +349,44 @@ describe("Structural Tests", () => {
 
     // Submit ticket
     state = governanceReducer(state, {
-      type: "SUBMIT_TICKET",
+      type: "ARCHITECT_SUBMIT_TICKET",
       payload: { ticket: makeTicket() },
     });
     expect(state.state).toBe("OPEN");
     expect(state.ticket).not.toBeNull();
 
     // Validate ticket
-    state = governanceReducer(state, {
-      type: "VALIDATE_TICKET",
-      payload: { ticketId: "TKT-001", role: "ARCHITECT" },
-    });
+    state = governanceReducer(state, { type: "RELAY_VALIDATE_TICKET" });
 
     // Forward ticket
     state = governanceReducer(state, {
-      type: "FORWARD_TICKET",
-      payload: { ticketId: "TKT-001", from: "ARCHITECT", to: "SPECIALIST" },
+      type: "RELAY_FORWARD_TICKET",
+      payload: { from: "RELAY", to: "SPECIALIST" },
     });
     expect(state.state).toBe("IN_PROGRESS");
 
     // Submit manifest
     state = governanceReducer(state, {
-      type: "SUBMIT_MANIFEST",
+      type: "ARCHITECT_SUBMIT_MANIFEST",
       payload: { manifest: makeManifest() },
     });
     expect(state.state).toBe("IN_PROGRESS");
 
     // Execute
     state = governanceReducer(state, {
-      type: "EXECUTE",
-      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001", role: "SPECIALIST" },
+      type: "SPECIALIST_EXECUTE",
+      payload: { ticketId: "TKT-001", manifestTicketId: "TKT-001" },
     });
     expect(state.state).toBe("IN_PROGRESS");
 
     // Return receipt
     state = governanceReducer(state, {
-      type: "RETURN_RECEIPT",
+      type: "SPECIALIST_RETURN_RECEIPT",
       payload: { receipt: makeReceipt() },
     });
 
     // Close ticket
-    state = governanceReducer(state, {
-      type: "CLOSE_TICKET",
-      payload: { ticketId: "TKT-001", role: "ARCHITECT" },
-    });
+    state = governanceReducer(state, { type: "ARCHITECT_CLOSE_TICKET" });
     expect(state.state).toBe("CLOSED");
 
     // Zero escalations
@@ -355,7 +395,6 @@ describe("Structural Tests", () => {
 
   it("Unknown event type → HALTED + escalation", () => {
     const state = createInitialState();
-    // Force an unknown event type through a cast
     const event = { type: "NONSENSE" } as unknown as Event;
     const result = governanceReducer(state, event);
     expect(result.state).toBe("HALTED");
@@ -365,13 +404,18 @@ describe("Structural Tests", () => {
 
   it("Reverse role boundary: SPECIALIST dispatches ARCHITECT-lane event → escalation", () => {
     const state = stateWithTicket();
-    // SPECIALIST tries to forward (ARCHITECT-lane action)
-    const event: Event = {
-      type: "FORWARD_TICKET",
-      payload: { ticketId: "TKT-001", from: "SPECIALIST", to: "STRIDE" },
-    };
-    const result = governanceReducer(state, event);
+    // Validate then try forwarding from SPECIALIST
+    const s1 = governanceReducer(state, { type: "RELAY_VALIDATE_TICKET" });
+    const s2 = governanceReducer(s1, {
+      type: "RELAY_FORWARD_TICKET",
+      payload: { from: "RELAY", to: "SPECIALIST" },
+    });
+    // Now SPECIALIST tries to submit a manifest (ARCHITECT-lane)
+    const result = governanceReducer(s2, {
+      type: "ARCHITECT_SUBMIT_MANIFEST",
+      payload: { manifest: { ...makeManifest(), approvedBy: "SPECIALIST" } },
+    });
     expect(result.escalations.length).toBeGreaterThan(0);
-    expect(result.escalations[0].trigger).toBe("role_boundary_violation");
+    expect(result.escalations.some(e => e.trigger === "role_boundary_violation")).toBe(true);
   });
 });

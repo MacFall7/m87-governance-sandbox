@@ -131,8 +131,11 @@ export function governanceReducer(state: SystemState, event: Event): SystemState
   switch (event.type) {
     case "ARCHITECT_SET_RISK": {
       const nextRisk = event.payload.risk;
-      const riskChanged = nextRisk !== state.riskClass && state.manifest != null;
-      if (riskChanged) {
+      const riskOrder: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+      const isEscalation =
+        state.manifest != null &&
+        riskOrder[nextRisk] > riskOrder[state.riskClass ?? "low"];
+      if (isEscalation) {
         let next: SystemState = { ...state, riskClass: nextRisk, manifest: null, receipt: null, receiptBundlePresent: false };
         next = escalate(
           next,

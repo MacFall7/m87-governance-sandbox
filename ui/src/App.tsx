@@ -57,9 +57,9 @@ export function App() {
           </div>
           {failureMatrix.find(e => e.id === selectedInjection) && (
             <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-dim)" }}>
+              <div><strong>Injection:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.injection}</div>
               <div><strong>Expected:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.expected}</div>
               <div><strong>Failure if:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.failure_if}</div>
-              <div><strong>Category:</strong> {failureMatrix.find(e => e.id === selectedInjection)!.category}</div>
             </div>
           )}
         </div>

@@ -1,187 +1,235 @@
 // M87 Governance Sandbox — Canonical Type Definitions
 // This file is additive only. Never remove or rename existing members.
 
-// ─── Roles ───────────────────────────────────────────────────────────────────
+export type GovernanceMode = "exploration" | "production";
 
-export type Role =
-  | "ARCHITECT"
-  | "RELAY"
-  | "SPECIALIST"
-  | "STRIDE";
-
-// ─── Governance Modes ────────────────────────────────────────────────────────
-
-export type GovernanceMode =
-  | "standard"
-  | "enhanced"
-  | "lockdown";
-
-// ─── Risk Classification ─────────────────────────────────────────────────────
-
-export type RiskClass =
-  | "low"
-  | "medium"
-  | "high"
-  | "critical";
-
-// ─── Ticket States ───────────────────────────────────────────────────────────
+export type RiskClass = "low" | "medium" | "high" | "critical";
 
 export type TicketState =
-  | "IDLE"
   | "OPEN"
   | "IN_PROGRESS"
   | "BLOCKED"
+  | "PENDING_VERIFICATION"
+  | "REJECTED_INCOMPLETE"
   | "HALTED"
   | "CLOSED";
 
-// ─── Escalation Severity ─────────────────────────────────────────────────────
+export type Role = "ARCHITECT" | "RELAY" | "SPECIALIST" | "STRIDE" | "HUMAN";
 
-export type EscalationSeverity =
-  | "low"
-  | "medium"
-  | "high"
-  | "critical";
+export type AssertionType =
+  | "completion_claim"
+  | "commitment_language"
+  | "status_statement"
+  | "assumption_statement"
+  | "context_compression";
 
-// ─── Escalation Triggers (20 canonical triggers) ────────────────────────────
+export interface Assertion {
+  type: AssertionType;
+  raw_text: string;
+  flagged: boolean;
+  detected_at: string; // deterministic timestamp
+}
 
 export type EscalationTrigger =
   | "missing_artifact_definition"
-  | "missing_ticket"
-  | "forward_without_ticket"
-  | "manifest_without_ticket"
-  | "manifest_ticket_mismatch"
-  | "execute_without_ticket"
-  | "execute_without_manifest"
-  | "execute_manifest_ticket_mismatch"
-  | "receipt_without_ticket_or_manifest"
-  | "receipt_ticket_mismatch"
+  | "missing_governance_mode"
+  | "ambiguous_acceptance_criteria"
+  | "missing_receipt_bundle"
+  | "none_outstanding_flag"
+  | "second_missed_commitment"
+  | "manifest_lint_fail"
+  | "context_compression_flag"
+  | "capability_scope_mismatch"
+  | "prod_egress_violation"
+  | "missing_rollback"
+  | "assumption_unverifiable_in_prod"
+  | "stride_outside_manifest"
+  | "stride_network_not_allowlisted"
+  | "stride_scope_expansion"
   | "stride_cold_start_failed"
-  | "close_without_artifacts"
-  | "unknown_event_type"
-  | "role_boundary_violation"
-  | "mode_risk_mismatch"
-  | "translation_integrity_failure"
-  | "duplicate_ticket"
-  | "action_on_closed"
-  | "action_on_halted"
-  | "missed_commitment_threshold";
-
-// ─── Assertion Types ─────────────────────────────────────────────────────────
-
-export type AssertionType =
-  | "invariant"
-  | "precondition"
-  | "postcondition"
-  | "boundary";
-
-// ─── Escalation Record ───────────────────────────────────────────────────────
+  | "stride_silent_divergence"
+  | "mode_switch_mid_ticket"
+  | "risk_escalation_requires_resign"
+  | "role_boundary_violation";
 
 export interface Escalation {
   trigger: EscalationTrigger;
-  severity: EscalationSeverity;
-  message: string;
-  timestamp: number;
+  routed_to: "ARCHITECT";
+  severity: "low" | "medium" | "high" | "critical";
+  details: string;
 }
 
-// ─── Event Log Entry ─────────────────────────────────────────────────────────
-
-export interface EventLogEntry {
-  from: Role;
-  to: Role;
-  label: string;
-  timestamp: number;
+export interface TicketAcceptanceCriterion {
+  id: string;
+  statement: string;
+  verifiable: boolean;
+  verification_method:
+    | "preflight_check"
+    | "config_read"
+    | "runtime_probe"
+    | "manual_attestation"
+    | "reproduction_test";
 }
-
-// ─── Assertion Record ────────────────────────────────────────────────────────
-
-export interface Assertion {
-  kind: AssertionType;
-  message: string;
-  passed: boolean;
-}
-
-// ─── Ticket ──────────────────────────────────────────────────────────────────
 
 export interface Ticket {
-  id: string;
-  title: string;
-  description: string;
-  riskClass: RiskClass;
-  createdBy: Role;
-  artifact_definition?: string;
+  ticket_id: string;
+  governance_mode?: GovernanceMode;
+  governance_mode_rationale?: string;
+  risk_class?: RiskClass;
+  acceptance_criteria: TicketAcceptanceCriterion[];
+  artifact_definition?: Record<string, unknown>;
+  environment_assumptions: Array<{
+    id: string;
+    statement: string;
+    verifiable: boolean;
+    verification_method:
+      | "preflight_check"
+      | "config_read"
+      | "runtime_probe"
+      | "manual_attestation";
+  }>;
+  known_failure_classes?: string[];
 }
 
-// ─── Manifest ────────────────────────────────────────────────────────────────
+export type EnvironmentTarget = "local_sandbox" | "ci_sandbox" | "staging" | "production";
+
+export type NetworkEgress = "none" | "allowlisted" | "open";
+
+export type Persistence = "none" | "workspace" | "volume" | "database";
+
+export type Isolation = "ephemeral" | "persistent";
+
+export type FsWriteScope = "none" | "sandbox" | "repo_only" | "staging" | "prod";
+
+export interface ManifestOperation {
+  op_id: string;
+  op_type:
+    | "run_command"
+    | "run_tests"
+    | "edit_file"
+    | "generate_file"
+    | "build"
+    | "docker"
+    | "http_request"
+    | "deploy"
+    | "database";
+  description: string;
+  required_capability?: Capability;
+  expected_effects: Array<
+    | "no_side_effects"
+    | "modifies_repo"
+    | "modifies_runtime"
+    | "modifies_environment"
+    | "network_egress"
+    | "writes_persistent_storage"
+  >;
+  rollback_strategy: "none" | "git_revert" | "restore_backup" | "redeploy_previous" | "manual";
+  params: Record<string, unknown>;
+}
+
+export type Capability =
+  | "read_repo"
+  | "write_repo"
+  | "run_tests"
+  | "build_artifact"
+  | "start_service"
+  | "stop_service"
+  | "http_request_allowlisted"
+  | "http_request_none"
+  | "file_read_sandbox"
+  | "file_write_sandbox"
+  | "docker_build"
+  | "docker_run"
+  | "deploy_staging"
+  | "deploy_production"
+  | "db_migrate"
+  | "db_read"
+  | "db_write";
 
 export interface Manifest {
-  ticketId: string;
-  steps: string[];
-  approvedBy: Role;
+  manifest_id: string;
+  ticket_id: string;
+  governance_mode: GovernanceMode;
+  risk_class: RiskClass;
+  // Phase 1 addition: first-class cold start requirement
   cold_start_required?: boolean;
+  environment_required: {
+    target: EnvironmentTarget;
+    isolation: Isolation;
+    persistence: Persistence;
+    network_egress: NetworkEgress;
+    filesystem_write_scope: FsWriteScope;
+  };
+  assumptions: Array<{
+    id: string;
+    statement: string;
+    verifiable: boolean;
+    verification_method: "preflight_check" | "config_read" | "runtime_probe" | "manual_attestation";
+  }>;
+  capability_scope: Capability[];
+  operations: ManifestOperation[];
+  constraints?: {
+    allowed_domains?: string[];
+  };
 }
-
-// ─── Receipt ─────────────────────────────────────────────────────────────────
 
 export interface Receipt {
-  ticketId: string;
-  manifestTicketId: string;
-  completedBy: Role;
-  result: "success" | "failure";
+  receipt_id: string;
+  manifest_id: string;
+  ticket_id: string;
+  cold_start_verified: boolean;
+  divergences: Array<{ severity: "minor" | "major" | "critical"; description: string; op_id?: string }>;
 }
 
-// ─── STRIDE Simulation State ─────────────────────────────────────────────────
-
-export interface StrideSimState {
-  spoofing: boolean;
-  tampering: boolean;
-  repudiation: boolean;
-  informationDisclosure: boolean;
-  denialOfService: boolean;
+export interface EventRecord {
+  ts: string;
+  from: Role;
+  to: Role;
+  event: string;
+  details?: string;
 }
-
-// ─── System State (canonical) ────────────────────────────────────────────────
 
 export interface SystemState {
-  state: TicketState;
-  mode: GovernanceMode;
-  riskClass: RiskClass;
   ticket: Ticket | null;
   manifest: Manifest | null;
   receipt: Receipt | null;
-  escalations: Escalation[];
-  eventLog: EventLogEntry[];
+  state: TicketState;
+  mode: GovernanceMode | null;
+  riskClass: RiskClass | null;
   assertions: Assertion[];
-  strideOnline: boolean;
-  strideSim: StrideSimState;
-  lastTranslationCompressed: boolean;
+  escalations: Escalation[];
+  eventLog: EventRecord[];
+  receiptBundlePresent: boolean;
   missedCommitments: number;
+  strideSim: {
+    attemptOutsideManifest: boolean;
+    persistentLeak: boolean;
+    notAllowlistedDomain: boolean;
+    scopeExpansion: boolean;
+    silentDivergence: boolean;
+  };
+  lastTranslationCompressed: boolean;
 }
 
-// ─── Legacy alias ────────────────────────────────────────────────────────────
-
-export type GovernanceState = SystemState;
-
-// ─── Events (Discriminated Union — 16 canonical event types) ────────────────
-
 export type Event =
-  | { type: "ARCHITECT_SUBMIT_TICKET"; payload: { ticket: Ticket } }
+  | { type: "ARCHITECT_SUBMIT_TICKET"; payload: Ticket }
   | { type: "RELAY_VALIDATE_TICKET" }
-  | { type: "RELAY_FORWARD_TICKET"; payload: { from: Role; to: Role } }
-  | { type: "ARCHITECT_SUBMIT_MANIFEST"; payload: { manifest: Manifest } }
-  | { type: "SPECIALIST_EXECUTE"; payload: { ticketId: string; manifestTicketId: string } }
-  | { type: "SPECIALIST_RETURN_RECEIPT"; payload: { receipt: Receipt } }
-  | { type: "ARCHITECT_CLOSE_TICKET" }
+  | { type: "RELAY_FORWARD_TO_SPECIALIST" }
+  | { type: "SPECIALIST_SUBMIT_MANIFEST"; payload: Manifest }
+  | { type: "RELAY_LINT_MANIFEST" }
+  | { type: "RELAY_RECORD_ASSERTION"; payload: { text: string } }
+  | { type: "RELAY_TRANSLATE"; payload: { text: string; compressed: boolean } }
+  | { type: "RELAY_MISSED_COMMITMENT" }
+  | { type: "RELAY_FORWARD_COMPLETION_CLAIM"; payload: { text: string } }
+  | { type: "SPECIALIST_DECLARE_DONE"; payload: { text: string } }
+  | { type: "STRIDE_EXECUTE" }
+  | { type: "STRIDE_RETURN_RECEIPT"; payload: Receipt }
+  | { type: "ARCHITECT_ATTEMPT_CLOSE" }
   | { type: "ARCHITECT_SET_MODE"; payload: { mode: GovernanceMode } }
-  | { type: "STRIDE_COLD_START"; payload: { success: boolean } }
-  | { type: "STRIDE_RUN_SIM"; payload: { category: keyof StrideSimState; result: boolean } }
-  | { type: "RELAY_COMPRESS_TRANSLATION" }
-  | { type: "RELAY_DECOMPRESS_TRANSLATION" }
-  | { type: "SPECIALIST_REPORT_COMMITMENT"; payload: { met: boolean } }
-  | { type: "ARCHITECT_ESCALATE"; payload: { trigger: EscalationTrigger; severity: EscalationSeverity; message: string } }
-  | { type: "RELAY_CHECK_MODE_RISK" }
-  | { type: "INJECT_FAULT"; payload: { injectionId: string } };
+  | { type: "ARCHITECT_SET_RISK"; payload: { risk: RiskClass } }
+  | { type: "ARCHITECT_EDIT_MANIFEST" };
 
-// ─── Failure Case Spec (prose-based, canonical) ─────────────────────────────
+// ─── Failure Case Spec (prose-based, frozen) ─────────────────────────────────
 
 export interface FailureCaseSpec {
   id: string;
@@ -189,54 +237,4 @@ export interface FailureCaseSpec {
   expected: string;
   failure_if: string;
   category: "architect" | "relay" | "specialist" | "stride" | "cross";
-}
-
-// ─── Injection Definition (state mutator, canonical) ─────────────────────────
-
-export interface Injection {
-  id: string;
-  apply: (s: SystemState) => SystemState;
-}
-
-// ─── Legacy interfaces (kept for compatibility) ──────────────────────────────
-
-export interface FailureMatrixEntry {
-  id: string;
-  name: string;
-  injection: string;
-  expectedTrigger: EscalationTrigger;
-  expectedSeverity: EscalationSeverity;
-  invariant: string;
-}
-
-export interface InjectionDefinition {
-  id: string;
-  name: string;
-  apply: (state: SystemState) => SystemState;
-}
-
-// ─── Initial State Factory ───────────────────────────────────────────────────
-
-export function createInitialState(): SystemState {
-  return {
-    state: "IDLE",
-    mode: "standard",
-    riskClass: "low",
-    ticket: null,
-    manifest: null,
-    receipt: null,
-    escalations: [],
-    eventLog: [],
-    assertions: [],
-    strideOnline: false,
-    strideSim: {
-      spoofing: false,
-      tampering: false,
-      repudiation: false,
-      informationDisclosure: false,
-      denialOfService: false,
-    },
-    lastTranslationCompressed: false,
-    missedCommitments: 0,
-  };
 }

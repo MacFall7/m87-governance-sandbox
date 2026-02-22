@@ -2,308 +2,396 @@
 // No `as any` allowed. All functions are fully typed.
 
 import type {
-  SystemState,
   Event,
+  SystemState,
   EscalationTrigger,
-  EscalationSeverity,
-  Role,
-  AssertionType,
   Escalation,
-  EventLogEntry,
+  AssertionType,
   Assertion,
-  GovernanceMode,
-  StrideSimState,
+  Role,
+  EventRecord,
+  Manifest,
+  ManifestOperation,
+  Receipt,
 } from "./types.js";
-import { isMeasurableAcceptance, modeCoversRisk } from "./helpers.js";
 
-// ─── Internal Helpers ────────────────────────────────────────────────────────
+// ─── Internal Helpers (fully typed) ──────────────────────────────────────────
 
-function escalate(
-  state: SystemState,
-  trigger: EscalationTrigger,
-  severity: EscalationSeverity,
-  message: string
-): SystemState {
-  const escalation: Escalation = {
-    trigger,
-    severity,
-    message,
-    timestamp: Date.now(),
-  };
-  return {
-    ...state,
-    escalations: [...state.escalations, escalation],
-  };
+function now(): string {
+  return "T+0";
 }
 
-function pushEvent(
-  state: SystemState,
-  from: Role,
-  to: Role,
-  label: string
-): SystemState {
-  const entry: EventLogEntry = {
-    from,
-    to,
-    label,
-    timestamp: Date.now(),
-  };
-  return {
-    ...state,
-    eventLog: [...state.eventLog, entry],
-  };
+function pushEvent(state: SystemState, from: Role, to: Role, label: string): SystemState {
+  const entry: EventRecord = { ts: now(), from, to, event: label };
+  return { ...state, eventLog: [...state.eventLog, entry] };
 }
 
-function addAssertion(
-  state: SystemState,
-  kind: AssertionType,
-  message: string,
-  passed: boolean
-): SystemState {
-  const assertion: Assertion = { kind, message, passed };
-  return {
-    ...state,
-    assertions: [...state.assertions, assertion],
+function escalate(state: SystemState, trigger: EscalationTrigger, severity: Escalation["severity"], details: string): SystemState {
+  const esc: Escalation = { trigger, routed_to: "ARCHITECT", severity, details };
+  return { ...state, escalations: [...state.escalations, esc] };
+}
+
+function addAssertion(state: SystemState, type: AssertionType, raw_text: string, flagged: boolean): SystemState {
+  const a: Assertion = { type, raw_text, flagged, detected_at: now() };
+  return { ...state, assertions: [...state.assertions, a] };
+}
+
+function shouldFlagAssertion(text: string): boolean {
+  const t = (text ?? "").toLowerCase();
+  const patterns = ["almost done", "nothing outstanding", "none outstanding", "all set", "completed", "finished", "done", "ready"];
+  return patterns.some((p) => t.includes(p));
+}
+
+function isMeasurableAcceptance(statement: string): boolean {
+  const s = statement.toLowerCase();
+  const hasDigits = /\d/.test(s);
+  const hasComparator = /(>=|<=|==|!=|>|<)/.test(statement);
+  const hasUnits = /(ms|seconds|sec|%|sha|checksum|hash|matches|must|true|false|within)/.test(s);
+  return hasDigits || hasComparator || hasUnits;
+}
+
+interface LintResult {
+  ok: boolean;
+  errors: Array<{ trigger: EscalationTrigger; message: string }>;
+}
+
+function lintManifest(manifest: Manifest): LintResult {
+  const errors: Array<{ trigger: EscalationTrigger; message: string }> = [];
+
+  if (!manifest.manifest_id) errors.push({ trigger: "manifest_lint_fail", message: "manifest.manifest_id missing" });
+  if (!manifest.ticket_id) errors.push({ trigger: "manifest_lint_fail", message: "manifest.ticket_id missing" });
+  if (!manifest.governance_mode) errors.push({ trigger: "manifest_lint_fail", message: "manifest.governance_mode missing" });
+  if (!manifest.risk_class) errors.push({ trigger: "manifest_lint_fail", message: "manifest.risk_class missing" });
+  if (!manifest.environment_required) errors.push({ trigger: "manifest_lint_fail", message: "manifest.environment_required missing" });
+
+  const requiresPersistence = JSON.stringify(manifest).toLowerCase().includes("persistence");
+  if (requiresPersistence && manifest.cold_start_required !== true) {
+    errors.push({ trigger: "manifest_lint_fail", message: "COLD_START_REQUIRED_FOR_PERSISTENCE: manifest.cold_start_required must be true when persistence is claimed." });
+  }
+
+  // Capability scope vs operation requirements
+  const scope: string[] = manifest.capability_scope ?? [];
+  const ops: ManifestOperation[] = manifest.operations ?? [];
+  for (const op of ops) {
+    if (op.required_capability && !scope.includes(op.required_capability)) {
+      errors.push({ trigger: "capability_scope_mismatch", message: `Operation ${op.op_id} requires "${op.required_capability}" not in scope.` });
+    }
+  }
+
+  // Production + open egress
+  const env = manifest.environment_required;
+  if (env?.target === "production" && env?.network_egress === "open") {
+    errors.push({ trigger: "prod_egress_violation", message: "Production target with open network egress is not allowed." });
+  }
+
+  // Env-modifying ops must have rollback
+  for (const op of ops) {
+    const effects: string[] = op.expected_effects ?? [];
+    if (effects.includes("modifies_environment") && op.rollback_strategy === "none") {
+      errors.push({ trigger: "missing_rollback", message: `Operation ${op.op_id} modifies environment but has no rollback.` });
+    }
+  }
+
+  // Unverifiable assumptions in production
+  if (manifest.governance_mode === "production") {
+    const assumptions = manifest.assumptions ?? [];
+    for (const a of assumptions) {
+      if (a.verifiable === false) {
+        errors.push({ trigger: "assumption_unverifiable_in_prod", message: `Assumption "${a.statement}" not verifiable in production.` });
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+function failStride(state: SystemState, trigger: EscalationTrigger, msg: string): SystemState {
+  let next = escalate(state, trigger, "high", msg);
+  next = pushEvent(next, "STRIDE", "ARCHITECT", `STRIDE_FAIL_${trigger}`);
+  return { ...next, state: "HALTED" };
+}
+
+function failStrideColdStart(state: SystemState): SystemState {
+  const receipt: Receipt = {
+    receipt_id: `RECEIPT_COLDSTART_FAIL`,
+    manifest_id: state.manifest?.manifest_id ?? "",
+    ticket_id: state.ticket?.ticket_id ?? "",
+    cold_start_verified: false,
+    divergences: [{ severity: "critical", description: "Persistent state leak - cold start not verified." }],
   };
+  let next: SystemState = { ...state, receipt, receiptBundlePresent: false };
+  next = escalate(next, "stride_cold_start_failed", "high", "Persistent state survived cold start.");
+  next = pushEvent(next, "STRIDE", "ARCHITECT", "STRIDE_FAIL_COLD_START");
+  return { ...next, state: "BLOCKED" };
 }
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
 
-export function governanceReducer(
-  state: SystemState,
-  event: Event
-): SystemState {
+export function governanceReducer(state: SystemState, event: Event): SystemState {
   switch (event.type) {
-    // ── ARCHITECT_SUBMIT_TICKET ────────────────────────────────────────────
-    case "ARCHITECT_SUBMIT_TICKET": {
-      if (state.ticket !== null) {
-        const s1 = escalate(state, "duplicate_ticket", "medium", "Ticket already exists — duplicate submit blocked");
-        return addAssertion(s1, "invariant", "No duplicate tickets", false);
+    case "ARCHITECT_SET_RISK": {
+      const nextRisk = event.payload.risk;
+      const riskEscalatedToHigh =
+        nextRisk === "high" && state.riskClass !== "high" && state.manifest != null;
+      if (riskEscalatedToHigh) {
+        let next: SystemState = { ...state, riskClass: nextRisk, manifest: null, receipt: null, receiptBundlePresent: false };
+        next = escalate(
+          next,
+          "risk_escalation_requires_resign",
+          "high",
+          "Risk escalated after manifest creation. Manifest invalidated; Specialist must re-submit under new risk."
+        );
+        next = pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_SET_RISK_ESCALATED_INVALIDATES_MANIFEST");
+        return { ...next, state: "BLOCKED" };
       }
-      const s1 = pushEvent(state, event.payload.ticket.createdBy, "RELAY", `Ticket submitted: ${event.payload.ticket.id}`);
-      const s2: SystemState = { ...s1, ticket: event.payload.ticket, state: "OPEN" };
-      return addAssertion(s2, "postcondition", "Ticket created", true);
+      const next: SystemState = { ...state, riskClass: nextRisk };
+      return pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_SET_RISK");
     }
 
-    // ── RELAY_VALIDATE_TICKET ──────────────────────────────────────────────
+    case "ARCHITECT_SET_MODE": {
+      const nextMode = event.payload.mode;
+      if (state.ticket && state.mode && state.mode !== nextMode) {
+        let next: SystemState = { ...state, mode: nextMode };
+        next = escalate(
+          next,
+          "mode_switch_mid_ticket",
+          "high",
+          `Mode switched mid-ticket from ${state.mode} to ${nextMode}. In-progress work must be re-evaluated.`
+        );
+        next = pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_SET_MODE_MID_TICKET");
+        return { ...next, state: "BLOCKED" };
+      }
+      const next: SystemState = { ...state, mode: nextMode };
+      return pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_SET_MODE");
+    }
+
+    case "ARCHITECT_SUBMIT_TICKET": {
+      const next: SystemState = {
+        ...state,
+        ticket: event.payload,
+        mode: event.payload.governance_mode ?? state.mode ?? null,
+        riskClass: event.payload.risk_class ?? state.riskClass ?? null,
+        state: "IN_PROGRESS",
+        manifest: null,
+        receipt: null,
+        receiptBundlePresent: false,
+        missedCommitments: 0,
+        assertions: state.assertions ?? [],
+        escalations: state.escalations ?? [],
+      };
+      return pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_SUBMIT_TICKET");
+    }
+
     case "RELAY_VALIDATE_TICKET": {
       if (!state.ticket) {
-        const s1 = escalate(state, "missing_ticket", "high", "Cannot validate — no active ticket");
-        return addAssertion(s1, "precondition", "Ticket must exist for validation", false);
+        const next = escalate(state, "missing_governance_mode", "high", "No ticket present.");
+        return pushEvent({ ...next, state: "OPEN" }, "RELAY", "ARCHITECT", "RELAY_VALIDATE_TICKET_FAIL");
       }
-      // Check artifact_definition
+      if (!state.mode) {
+        const next = escalate(state, "missing_governance_mode", "high", "Governance mode must be declared by ARCHITECT.");
+        return pushEvent({ ...next, state: "OPEN" }, "RELAY", "ARCHITECT", "RELAY_VALIDATE_TICKET_FAIL");
+      }
+      if (!state.riskClass) {
+        const next = escalate(state, "missing_governance_mode", "high", "Risk class must be declared by ARCHITECT.");
+        return pushEvent({ ...next, state: "OPEN" }, "RELAY", "ARCHITECT", "RELAY_VALIDATE_TICKET_FAIL");
+      }
       if (!state.ticket.artifact_definition) {
-        const s1 = escalate(state, "missing_artifact_definition", "high", "Ticket missing artifact_definition");
-        return addAssertion(s1, "invariant", "Artifact definition required", false);
+        const next = escalate(state, "missing_artifact_definition", "high", "Ticket missing artifact_definition.");
+        return pushEvent({ ...next, state: "OPEN" }, "RELAY", "ARCHITECT", "RELAY_VALIDATE_TICKET_FAIL");
       }
-      const s1 = pushEvent(state, "RELAY", "ARCHITECT", `Ticket validated: ${state.ticket.id}`);
-      return addAssertion(s1, "postcondition", "Ticket validated", true);
+      const criteria = state.ticket.acceptance_criteria ?? [];
+      const hasAmbiguous = criteria.some((c) => !isMeasurableAcceptance(c.statement));
+      if (hasAmbiguous) {
+        const next = escalate(state, "ambiguous_acceptance_criteria", "high", "Acceptance criteria contain ambiguous (non-measurable) statements.");
+        return pushEvent({ ...next, state: "OPEN" }, "RELAY", "ARCHITECT", "RELAY_VALIDATE_TICKET_FAIL");
+      }
+      return pushEvent({ ...state, state: "IN_PROGRESS" }, "RELAY", "RELAY", "RELAY_VALIDATE_TICKET_OK");
     }
 
-    // ── RELAY_FORWARD_TICKET ───────────────────────────────────────────────
-    case "RELAY_FORWARD_TICKET": {
-      // State guard: no forwarding on CLOSED
-      if (state.state === "CLOSED") {
-        const s1 = escalate(state, "action_on_closed", "medium", "Cannot forward — state is CLOSED");
-        return addAssertion(s1, "precondition", "Cannot forward in CLOSED state", false);
-      }
-      // State guard: no forwarding on HALTED
-      if (state.state === "HALTED") {
-        const s1 = escalate(state, "action_on_halted", "critical", "Cannot forward — state is HALTED");
-        return addAssertion(s1, "precondition", "Cannot forward in HALTED state", false);
-      }
+    case "RELAY_FORWARD_TO_SPECIALIST": {
       if (!state.ticket) {
-        const s1 = escalate(state, "forward_without_ticket", "high", "Cannot forward — no active ticket");
-        return addAssertion(s1, "precondition", "Ticket must exist for forwarding", false);
+        const next = escalate(state, "missing_governance_mode", "high", "Cannot forward without a ticket.");
+        return pushEvent({ ...next, state: "REJECTED_INCOMPLETE" }, "RELAY", "ARCHITECT", "RELAY_FORWARD_FAIL");
       }
-      // IDLE → must validate first
-      if (state.state === "IDLE") {
-        const s1 = escalate(state, "forward_without_ticket", "high", "Cannot forward from IDLE — ticket not validated");
-        return addAssertion(s1, "precondition", "Ticket must be validated before forwarding", false);
-      }
-      // Role boundary: only ARCHITECT or RELAY can forward
-      if (event.payload.from !== "ARCHITECT" && event.payload.from !== "RELAY") {
-        const s1 = escalate(state, "role_boundary_violation", "high", `${event.payload.from} cannot forward tickets`);
-        return addAssertion(s1, "boundary", "Only ARCHITECT or RELAY can forward", false);
-      }
-      const s1 = pushEvent(state, event.payload.from, event.payload.to, `Ticket forwarded`);
-      const s2: SystemState = { ...s1, state: "IN_PROGRESS" };
-      return addAssertion(s2, "postcondition", "Ticket forwarded", true);
+      return pushEvent({ ...state }, "RELAY", "SPECIALIST", "RELAY_FORWARD_TO_SPECIALIST");
     }
 
-    // ── ARCHITECT_SUBMIT_MANIFEST ──────────────────────────────────────────
-    case "ARCHITECT_SUBMIT_MANIFEST": {
+    case "SPECIALIST_SUBMIT_MANIFEST": {
       if (!state.ticket) {
-        const s1 = escalate(state, "manifest_without_ticket", "high", "Cannot submit manifest — no active ticket");
-        return addAssertion(s1, "precondition", "Ticket must exist for manifest", false);
+        let next = escalate(state, "manifest_lint_fail", "high", "Manifest submitted with no active ticket.");
+        next = pushEvent(next, "SPECIALIST", "RELAY", "SPECIALIST_SUBMIT_MANIFEST_REJECTED_NO_TICKET");
+        return { ...next, state: "REJECTED_INCOMPLETE" };
       }
-      // Role boundary: only ARCHITECT or RELAY can submit manifests
-      if (event.payload.manifest.approvedBy !== "ARCHITECT" && event.payload.manifest.approvedBy !== "RELAY") {
-        const s1 = escalate(state, "role_boundary_violation", "high", `${event.payload.manifest.approvedBy} cannot submit manifests`);
-        return addAssertion(s1, "boundary", "Only ARCHITECT or RELAY can submit manifests", false);
+      if (event.payload.ticket_id !== state.ticket.ticket_id) {
+        let next = escalate(
+          state,
+          "manifest_lint_fail",
+          "high",
+          `Manifest ticket_id (${event.payload.ticket_id}) does not match active ticket (${state.ticket.ticket_id}).`
+        );
+        next = pushEvent(next, "SPECIALIST", "ARCHITECT", "SPECIALIST_SUBMIT_MANIFEST_REJECTED_MISMATCH");
+        return { ...next, state: "REJECTED_INCOMPLETE" };
       }
-      // Set manifest, then check ticket mismatch
-      const withManifest: SystemState = { ...state, manifest: event.payload.manifest };
-      if (event.payload.manifest.ticketId !== state.ticket.id) {
-        const s1 = escalate(withManifest, "manifest_ticket_mismatch", "high",
-          `Manifest references ${event.payload.manifest.ticketId} but active ticket is ${state.ticket.id}`);
-        return addAssertion(s1, "invariant", "Manifest must reference active ticket", false);
-      }
-      const s1 = pushEvent(withManifest, event.payload.manifest.approvedBy, "SPECIALIST",
-        `Manifest submitted for ${event.payload.manifest.ticketId}`);
-      const s2: SystemState = { ...s1, state: "IN_PROGRESS" };
-      return addAssertion(s2, "postcondition", "Manifest submitted and validated", true);
+      const next: SystemState = {
+        ...state,
+        manifest: event.payload,
+        receipt: null,
+        receiptBundlePresent: false,
+      };
+      return pushEvent(next, "SPECIALIST", "RELAY", "SPECIALIST_SUBMIT_MANIFEST_ACCEPTED");
     }
 
-    // ── SPECIALIST_EXECUTE ─────────────────────────────────────────────────
-    case "SPECIALIST_EXECUTE": {
-      // State guard: no execution on HALTED
-      if (state.state === "HALTED") {
-        const s1 = escalate(state, "action_on_halted", "critical", "Cannot execute — state is HALTED");
-        return addAssertion(s1, "precondition", "Cannot execute in HALTED state", false);
+    case "RELAY_LINT_MANIFEST": {
+      if (!state.manifest) {
+        const next = escalate(state, "manifest_lint_fail", "high", "No manifest to lint.");
+        return pushEvent({ ...next, state: "REJECTED_INCOMPLETE" }, "RELAY", "ARCHITECT", "RELAY_LINT_MANIFEST_FAIL");
       }
+      if (!state.ticket || state.manifest.ticket_id !== state.ticket.ticket_id) {
+        const next = escalate(
+          state,
+          "manifest_lint_fail",
+          "high",
+          "Manifest ticket_id does not match active ticket during lint."
+        );
+        return pushEvent({ ...next, state: "REJECTED_INCOMPLETE" }, "RELAY", "ARCHITECT", "RELAY_LINT_MANIFEST_FAIL");
+      }
+      const lint = lintManifest(state.manifest);
+      if (!lint.ok) {
+        let next: SystemState = state;
+        for (const err of lint.errors) next = escalate(next, err.trigger, "high", err.message);
+        next = pushEvent(next, "RELAY", "ARCHITECT", "RELAY_LINT_MANIFEST_FAIL");
+        return { ...next, state: "REJECTED_INCOMPLETE" };
+      }
+      return pushEvent({ ...state, state: "IN_PROGRESS" }, "RELAY", "RELAY", "RELAY_LINT_MANIFEST_OK");
+    }
+
+    case "RELAY_RECORD_ASSERTION": {
+      const flagged = shouldFlagAssertion(event.payload.text);
+      let next = addAssertion(state, "assumption_statement", event.payload.text, flagged);
+      if (flagged) {
+        next = escalate(next, "none_outstanding_flag", "high", `Flagged assertion detected: "${event.payload.text}"`);
+      }
+      return pushEvent(next, "RELAY", "RELAY", "RELAY_RECORD_ASSERTION");
+    }
+
+    case "RELAY_TRANSLATE": {
+      if (event.payload.compressed) {
+        let next = addAssertion(state, "context_compression", event.payload.text, true);
+        next = escalate(next, "context_compression_flag", "high", "Context compression detected during translation.");
+        next = pushEvent(next, "RELAY", "ARCHITECT", "RELAY_TRANSLATE_COMPRESSED");
+        return next;
+      }
+      const next: SystemState = { ...state, lastTranslationCompressed: false };
+      return pushEvent(next, "RELAY", "RELAY", "RELAY_TRANSLATE_CLEAN");
+    }
+
+    case "RELAY_MISSED_COMMITMENT": {
+      const count = (state.missedCommitments ?? 0) + 1;
+      let next: SystemState = { ...state, missedCommitments: count };
+      if (count >= 2) {
+        next = escalate(next, "second_missed_commitment", "high", `Missed commitment #${count}. Escalating to Architect.`);
+      }
+      return pushEvent(next, "RELAY", "ARCHITECT", "RELAY_MISSED_COMMITMENT");
+    }
+
+    case "RELAY_FORWARD_COMPLETION_CLAIM": {
+      if (!state.receiptBundlePresent) {
+        let next = addAssertion(state, "completion_claim", event.payload.text, true);
+        next = escalate(next, "missing_receipt_bundle", "high", "Completion claim without receipt bundle.");
+        next = pushEvent(next, "RELAY", "ARCHITECT", "RELAY_FORWARD_COMPLETION_REJECTED");
+        return { ...next, state: "REJECTED_INCOMPLETE" };
+      }
+      const next = addAssertion(state, "completion_claim", event.payload.text, shouldFlagAssertion(event.payload.text));
+      return pushEvent(next, "RELAY", "ARCHITECT", "RELAY_FORWARD_COMPLETION_CLAIM");
+    }
+
+    case "SPECIALIST_DECLARE_DONE": {
+      let next = addAssertion(state, "status_statement", event.payload.text, shouldFlagAssertion(event.payload.text));
+      next = { ...next, state: "PENDING_VERIFICATION" as const };
+      if (!state.receiptBundlePresent) {
+        next = escalate(next, "missing_receipt_bundle", "high", "Specialist declared done but no receipt bundle present.");
+      }
+      return pushEvent(next, "SPECIALIST", "RELAY", "SPECIALIST_DECLARE_DONE");
+    }
+
+    case "STRIDE_EXECUTE": {
       if (!state.ticket) {
-        const s1 = escalate(state, "execute_without_ticket", "high", "Cannot execute — no active ticket");
-        return addAssertion(s1, "precondition", "Ticket must exist for execution", false);
+        let next = escalate(state, "stride_outside_manifest", "high", "STRIDE attempted execution with no ticket.");
+        next = pushEvent(next, "STRIDE", "ARCHITECT", "STRIDE_EXECUTE_REJECTED_NO_TICKET");
+        return { ...next, state: "HALTED" };
       }
       if (!state.manifest) {
-        const s1 = escalate(state, "execute_without_manifest", "high", "Cannot execute — no manifest");
-        return addAssertion(s1, "precondition", "Manifest must exist for execution", false);
+        let next = escalate(state, "stride_outside_manifest", "high", "STRIDE attempted execution with no manifest.");
+        next = pushEvent(next, "STRIDE", "RELAY", "STRIDE_EXECUTE_REJECTED_NO_MANIFEST");
+        return { ...next, state: "HALTED" };
       }
-      if (state.manifest.ticketId !== state.ticket.id) {
-        const s1 = escalate(state, "execute_manifest_ticket_mismatch", "high",
-          `Manifest ticket ${state.manifest.ticketId} does not match active ticket ${state.ticket.id}`);
-        return addAssertion(s1, "invariant", "Manifest must reference active ticket for execution", false);
+      if (state.manifest.ticket_id !== state.ticket.ticket_id) {
+        let next = escalate(
+          state,
+          "stride_outside_manifest",
+          "high",
+          `Execution blocked: manifest.ticket_id (${state.manifest.ticket_id}) != ticket.ticket_id (${state.ticket.ticket_id}).`
+        );
+        next = pushEvent(next, "STRIDE", "ARCHITECT", "STRIDE_EXECUTE_REJECTED_MISMATCH");
+        return { ...next, state: "HALTED" };
       }
-      const s1 = pushEvent(state, "SPECIALIST", "RELAY", `Execution started for ${event.payload.ticketId}`);
-      const s2: SystemState = { ...s1, state: "IN_PROGRESS" };
-      return addAssertion(s2, "postcondition", "Execution started", true);
+
+      const sim = state.strideSim;
+      if (sim.attemptOutsideManifest) return failStride(state, "stride_outside_manifest", "STRIDE executing outside manifest.");
+      if (sim.persistentLeak) return failStrideColdStart(state);
+      if (sim.notAllowlistedDomain) return failStride(state, "stride_network_not_allowlisted", "Network call not allowlisted.");
+      if (sim.scopeExpansion) return failStride(state, "stride_scope_expansion", "Scope expansion mid-exec.");
+      if (sim.silentDivergence) {
+        let next = escalate(state, "stride_silent_divergence", "high", "Partial success with silent divergence.");
+        next = pushEvent(next, "STRIDE", "ARCHITECT", "STRIDE_FAIL_SILENT_DIVERGENCE");
+        return { ...next, state: "BLOCKED" };
+      }
+
+      return pushEvent({ ...state, state: "IN_PROGRESS" }, "STRIDE", "RELAY", "STRIDE_EXECUTE");
     }
 
-    // ── SPECIALIST_RETURN_RECEIPT ──────────────────────────────────────────
-    case "SPECIALIST_RETURN_RECEIPT": {
+    case "STRIDE_RETURN_RECEIPT": {
       if (!state.ticket || !state.manifest) {
-        const s1 = escalate(state, "receipt_without_ticket_or_manifest", "high", "Cannot return receipt — missing ticket or manifest");
-        return addAssertion(s1, "precondition", "Ticket and manifest must exist for receipt", false);
+        let next = escalate(state, "missing_receipt_bundle", "high", "Receipt returned without ticket/manifest.");
+        next = pushEvent(next, "STRIDE", "ARCHITECT", "STRIDE_RETURN_RECEIPT_REJECTED");
+        return { ...next, state: "BLOCKED" };
       }
-      if (event.payload.receipt.ticketId !== state.ticket.id) {
-        const s1 = escalate(state, "receipt_ticket_mismatch", "high",
-          `Receipt ticket ${event.payload.receipt.ticketId} does not match active ticket ${state.ticket.id}`);
-        return addAssertion(s1, "invariant", "Receipt must reference active ticket", false);
+      if (event.payload.ticket_id !== state.ticket.ticket_id) {
+        let next = escalate(state, "missing_receipt_bundle", "high", "Receipt ticket_id mismatch.");
+        next = pushEvent(next, "STRIDE", "ARCHITECT", "STRIDE_RETURN_RECEIPT_REJECTED");
+        return { ...next, state: "BLOCKED" };
       }
-      if (event.payload.receipt.manifestTicketId !== state.manifest.ticketId) {
-        const s1 = escalate(state, "receipt_ticket_mismatch", "high",
-          `Receipt manifest ticket ${event.payload.receipt.manifestTicketId} does not match manifest ${state.manifest.ticketId}`);
-        return addAssertion(s1, "invariant", "Receipt must reference correct manifest ticket", false);
-      }
-      const s1 = pushEvent(state, event.payload.receipt.completedBy, "RELAY",
-        `Receipt returned for ${event.payload.receipt.ticketId}`);
-      const s2: SystemState = { ...s1, receipt: event.payload.receipt };
-      return addAssertion(s2, "postcondition", "Receipt recorded", true);
+      const next: SystemState = {
+        ...state,
+        receipt: event.payload,
+        receiptBundlePresent: true,
+        state: "IN_PROGRESS",
+      };
+      return pushEvent(next, "STRIDE", "RELAY", "STRIDE_RETURN_RECEIPT");
     }
 
-    // ── ARCHITECT_CLOSE_TICKET ─────────────────────────────────────────────
-    case "ARCHITECT_CLOSE_TICKET": {
-      if (state.state === "CLOSED") {
-        const s1 = escalate(state, "action_on_closed", "medium", "Cannot close — ticket already closed");
-        return addAssertion(s1, "precondition", "Cannot close already closed ticket", false);
+    case "ARCHITECT_ATTEMPT_CLOSE": {
+      if (!state.ticket || !state.manifest || !state.receipt || !state.receiptBundlePresent) {
+        let next = escalate(state, "missing_receipt_bundle", "high", "Cannot close without ticket+manifest+receipt bundle.");
+        next = pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_CLOSE_REJECTED");
+        return { ...next, state: "REJECTED_INCOMPLETE" };
       }
-      if (!isMeasurableAcceptance(state)) {
-        const s1 = escalate(state, "close_without_artifacts", "high", "Cannot close — measurable acceptance criteria not met");
-        return addAssertion(s1, "invariant", "Measurable acceptance required for close", false);
+      const hasHigh = (state.escalations ?? []).some((e) => e.severity === "high");
+      if (hasHigh) {
+        const next = pushEvent(state, "ARCHITECT", "RELAY", "ARCHITECT_CLOSE_BLOCKED_ESCALATION");
+        return { ...next, state: "BLOCKED" };
       }
-      const s1 = pushEvent(state, "ARCHITECT", "RELAY", "Ticket closed");
-      const s2: SystemState = { ...s1, state: "CLOSED" };
-      return addAssertion(s2, "postcondition", "Ticket closed with measurable acceptance", true);
+      const next: SystemState = { ...state, state: "CLOSED" };
+      return pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_ATTEMPT_CLOSE");
     }
 
-    // ── ARCHITECT_SET_MODE ─────────────────────────────────────────────────
-    case "ARCHITECT_SET_MODE": {
-      const s1 = pushEvent(state, "ARCHITECT", "RELAY", `Mode changed to ${event.payload.mode}`);
-      const s2: SystemState = { ...s1, mode: event.payload.mode };
-      return addAssertion(s2, "postcondition", "Governance mode updated", true);
+    case "ARCHITECT_EDIT_MANIFEST": {
+      let next = escalate(state, "role_boundary_violation", "high", "Architect entered Specialist lane (manifest edit).");
+      next = pushEvent(next, "ARCHITECT", "RELAY", "ARCHITECT_EDIT_MANIFEST_BLOCKED");
+      return { ...next, state: "BLOCKED" };
     }
 
-    // ── STRIDE_COLD_START ──────────────────────────────────────────────────
-    case "STRIDE_COLD_START": {
-      if (!event.payload.success) {
-        const s1 = escalate(state, "stride_cold_start_failed", "critical", "STRIDE cold start failed");
-        const s2: SystemState = { ...s1, strideOnline: false, state: "HALTED" };
-        return addAssertion(s2, "invariant", "STRIDE must be online", false);
-      }
-      const s1 = pushEvent(state, "STRIDE", "RELAY", "STRIDE cold start succeeded");
-      const s2: SystemState = { ...s1, strideOnline: true };
-      return addAssertion(s2, "postcondition", "STRIDE online", true);
-    }
-
-    // ── STRIDE_RUN_SIM ─────────────────────────────────────────────────────
-    case "STRIDE_RUN_SIM": {
-      const category = event.payload.category;
-      const newSim: StrideSimState = { ...state.strideSim, [category]: event.payload.result };
-      const s1: SystemState = { ...state, strideSim: newSim };
-      if (event.payload.result) {
-        // Threat detected
-        const s2 = escalate(s1, "stride_cold_start_failed", "high", `STRIDE threat detected: ${category}`);
-        const s3: SystemState = { ...s2, state: "BLOCKED" };
-        return addAssertion(s3, "invariant", `STRIDE ${category} threat detected`, false);
-      }
-      return addAssertion(s1, "postcondition", `STRIDE ${category} sim passed`, true);
-    }
-
-    // ── RELAY_COMPRESS_TRANSLATION ─────────────────────────────────────────
-    case "RELAY_COMPRESS_TRANSLATION": {
-      const s1: SystemState = { ...state, lastTranslationCompressed: true };
-      return addAssertion(s1, "postcondition", "Translation compressed", true);
-    }
-
-    // ── RELAY_DECOMPRESS_TRANSLATION ───────────────────────────────────────
-    case "RELAY_DECOMPRESS_TRANSLATION": {
-      if (state.lastTranslationCompressed) {
-        const s1 = escalate(state, "translation_integrity_failure", "high", "Translation was compressed — integrity check failed");
-        return addAssertion(s1, "invariant", "Translation integrity required", false);
-      }
-      return addAssertion(state, "postcondition", "Translation decompression check passed", true);
-    }
-
-    // ── SPECIALIST_REPORT_COMMITMENT ───────────────────────────────────────
-    case "SPECIALIST_REPORT_COMMITMENT": {
-      const newCount = event.payload.met ? 0 : state.missedCommitments + 1;
-      const s1: SystemState = { ...state, missedCommitments: newCount };
-      if (newCount >= 3) {
-        const s2 = escalate(s1, "missed_commitment_threshold", "high", `Missed commitments: ${newCount}`);
-        const s3: SystemState = { ...s2, state: "BLOCKED" };
-        return addAssertion(s3, "invariant", "Missed commitment threshold exceeded", false);
-      }
-      return addAssertion(s1, "postcondition", "Commitment reported", true);
-    }
-
-    // ── ARCHITECT_ESCALATE ─────────────────────────────────────────────────
-    case "ARCHITECT_ESCALATE": {
-      const s1 = escalate(state, event.payload.trigger, event.payload.severity, event.payload.message);
-      return addAssertion(s1, "postcondition", "Manual escalation recorded", true);
-    }
-
-    // ── RELAY_CHECK_MODE_RISK ──────────────────────────────────────────────
-    case "RELAY_CHECK_MODE_RISK": {
-      if (!modeCoversRisk(state.mode, state.riskClass)) {
-        const s1 = escalate(state, "mode_risk_mismatch", "high",
-          `Mode ${state.mode} insufficient for risk ${state.riskClass}`);
-        const s2: SystemState = { ...s1, state: "BLOCKED" };
-        return addAssertion(s2, "invariant", "Mode must cover risk class", false);
-      }
-      return addAssertion(state, "postcondition", "Mode covers risk — OK", true);
-    }
-
-    // ── INJECT_FAULT ───────────────────────────────────────────────────────
-    case "INJECT_FAULT": {
+    default:
       return state;
-    }
-
-    default: {
-      const _exhaustiveCheck: never = event;
-      void _exhaustiveCheck;
-      const next = escalate(state, "unknown_event_type", "high", "Unrecognized event type");
-      return { ...next, state: "HALTED" };
-    }
   }
 }

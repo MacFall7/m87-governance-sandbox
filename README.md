@@ -6,7 +6,7 @@ Internal tool proving that M87 Studio's 7 architectural invariants hold under ad
 
 ```bash
 npm install
-npm test              # 27 tests (22 failure matrix + 5 structural)
+npm test              # 23 tests (22 failure matrix + 1 structural)
 npm run typecheck     # tsc --noEmit
 ```
 

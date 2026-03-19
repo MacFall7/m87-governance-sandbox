@@ -7,7 +7,7 @@ M87 Governance Sandbox — a pure-function state machine proving 7 architectural
 ## Commands
 
 ```bash
-npm test          # Run all tests (must be 27/27)
+npm test          # Run all tests (must be 23/23)
 npm run typecheck # tsc --noEmit (must be 0 errors)
 npm run lint      # Both of the above
 ```

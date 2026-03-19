@@ -5,49 +5,18 @@ import type {
   Event,
   SystemState,
   EscalationTrigger,
-  Escalation,
-  AssertionType,
-  Assertion,
-  Role,
-  EventRecord,
   Manifest,
   ManifestOperation,
   Receipt,
 } from "./types.js";
+import { pushEvent, escalate, addAssertion, isMeasurableAcceptance } from "./helpers.js";
 
 // ─── Internal Helpers (fully typed) ──────────────────────────────────────────
-
-function now(): string {
-  return "T+0";
-}
-
-function pushEvent(state: SystemState, from: Role, to: Role, label: string): SystemState {
-  const entry: EventRecord = { ts: now(), from, to, event: label };
-  return { ...state, eventLog: [...state.eventLog, entry] };
-}
-
-function escalate(state: SystemState, trigger: EscalationTrigger, severity: Escalation["severity"], details: string): SystemState {
-  const esc: Escalation = { trigger, routed_to: "ARCHITECT", severity, details };
-  return { ...state, escalations: [...state.escalations, esc] };
-}
-
-function addAssertion(state: SystemState, type: AssertionType, raw_text: string, flagged: boolean): SystemState {
-  const a: Assertion = { type, raw_text, flagged, detected_at: now() };
-  return { ...state, assertions: [...state.assertions, a] };
-}
 
 function shouldFlagAssertion(text: string): boolean {
   const t = (text ?? "").toLowerCase();
   const patterns = ["almost done", "nothing outstanding", "none outstanding", "all set", "completed", "finished", "done", "ready"];
   return patterns.some((p) => t.includes(p));
-}
-
-function isMeasurableAcceptance(statement: string): boolean {
-  const s = statement.toLowerCase();
-  const hasDigits = /\d/.test(s);
-  const hasComparator = /(>=|<=|==|!=|>|<)/.test(statement);
-  const hasUnits = /(ms|seconds|sec|%|sha|checksum|hash|matches|must|true|false|within)/.test(s);
-  return hasDigits || hasComparator || hasUnits;
 }
 
 interface LintResult {
@@ -64,7 +33,8 @@ function lintManifest(manifest: Manifest): LintResult {
   if (!manifest.risk_class) errors.push({ trigger: "manifest_lint_fail", message: "manifest.risk_class missing" });
   if (!manifest.environment_required) errors.push({ trigger: "manifest_lint_fail", message: "manifest.environment_required missing" });
 
-  const requiresPersistence = JSON.stringify(manifest).toLowerCase().includes("persistence");
+  const persistence = manifest.environment_required?.persistence;
+  const requiresPersistence = persistence !== undefined && persistence !== "none";
   if (requiresPersistence && manifest.cold_start_required !== true) {
     errors.push({ trigger: "manifest_lint_fail", message: "COLD_START_REQUIRED_FOR_PERSISTENCE: manifest.cold_start_required must be true when persistence is claimed." });
   }

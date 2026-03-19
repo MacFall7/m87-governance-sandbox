@@ -79,6 +79,6 @@ Beyond the 22 failure matrix tests:
 
 - Debug session: Prior to repo creation
 - Hardening session: This repo
-- All 27 tests passing at commit time
+- All 23 tests passing at commit time
 - Zero `as any` in reducer
 - `tsc --noEmit` clean

@@ -1,8 +1,17 @@
 # M87 Governance Sandbox
 
+[![CI](https://github.com/MacFall7/m87-governance-sandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/MacFall7/m87-governance-sandbox/actions/workflows/ci.yml)
+
+```
+ 23 tests | 22 failure-matrix injections | 0 type errors
+ ✓ test/governanceReducer.test.ts  (23 tests) — all green
+```
+
 A pure-function state machine that proves 7 architectural invariants hold under 22 adversarial injection scenarios.
 
-Built by [M87 Studio](https://m87.studio) to verify governance guarantees before they reach production.
+Built by [M87 Studio](https://m87studio.net) to verify governance guarantees before they reach production.
+
+**Proof entry point:** [`test/governanceReducer.test.ts`](./test/governanceReducer.test.ts) — runs every injection from the frozen failure matrix against the reducer and asserts the correct escalation fires.
 
 ## What It Proves
 
@@ -42,6 +51,10 @@ test/
   governanceReducer.test.ts — Full failure matrix + structural sanity check
 ui/                 — React sandbox (4-column governance visualizer)
 ```
+
+## Design Note: Deterministic Timestamps
+
+All timestamps in the event log are the fixed string `"T+0"`. This is intentional — the reducer is a pure function `(state, event) → state` with no side effects, so `Date.now()` is forbidden. Determinism makes every test run reproducible regardless of environment.
 
 ## UI Sandbox
 

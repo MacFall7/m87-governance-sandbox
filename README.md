@@ -57,4 +57,5 @@ Push or PR triggers GitHub Actions: `npm ci → test → typecheck`.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Business Source License 1.1 (Modified — M87 Spine Governance License v1.0) — see [LICENSE](./LICENSE).
+Internal production use permitted. Commercial Governance Service use prohibited.

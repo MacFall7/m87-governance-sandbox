@@ -1,21 +1,139 @@
-MIT License
+# Business Source License 1.1 (Modified — M87 Spine Governance License v1.0)
 
-Copyright (c) 2026 M87 Studio LLC
+## Parameters
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+**Licensor:**
+M87 Studio LLC
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+**Licensed Work:**
+governance-sandbox
+The Licensed Work is (c) 2026 M87 Studio LLC
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+**Additional Use Grant:**
+You may make production use of the Licensed Work, provided such use is strictly limited to internal deployment within a single organization and does not include offering, exposing, or enabling the Licensed Work, or any derivative of it, to third parties as a Commercial Governance Service (as defined below), whether on a hosted, embedded, API-accessible, or otherwise programmatically accessible basis.
+
+**Change Date:**
+March 1, 2029
+
+**Change License:**
+Apache License, Version 2.0
+
+-----
+
+## Definitions (Binding)
+
+**Commercial Governance Service**
+Any system, API, platform, or embedded feature that provides proposal evaluation, approval/denial decisions, execution gating, enforcement logic, or audit validation derived from the Licensed Work to any third party in exchange for monetary or contractual consideration.
+
+This includes, but is not limited to:
+
+- Governance-as-a-service platforms
+- Embedded governance layers within SaaS or developer tools
+- APIs exposing decision or enforcement outcomes
+- White-labeled governance infrastructure
+- Multi-tenant systems where governance decisions affect external users
+
+Non-commercial evaluation, academic research, and open-source integrations that do not generate revenue or formal contractual obligations for the Licensee are not Commercial Governance Services.
+
+-----
+
+**Embedded Use**
+Inclusion of the Licensed Work or any derivative within a larger system, product, or platform where governance functionality is made available, directly or indirectly, to third parties—regardless of whether governance is marketed as a primary or secondary feature.
+
+-----
+
+**Permitted Production Use**
+Use of the Licensed Work within a single legal entity for internal operations where:
+
+- governance decisions are not exposed externally
+- no third party receives governance outputs
+- no external system relies on governance decisions derived from the Licensed Work
+
+Internal subsidiaries under common control are considered a single entity.
+
+-----
+
+**Third Party**
+Any individual, organization, or system not under direct ownership or control of the Licensee.
+
+-----
+
+## Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative works, and redistribute the Licensed Work for non-production use.
+
+The Licensor further grants you the right to make production use of the Licensed Work under the conditions defined in the Additional Use Grant and Permitted Production Use.
+
+-----
+
+## Restriction
+
+You may not use the Licensed Work, or any derivative of the Licensed Work, to build, operate, or offer a Commercial Governance Service.
+
+This restriction applies regardless of:
+
+- architectural composition
+- code modification level
+- degree of integration into a larger system
+- whether the governance functionality is primary or incidental
+
+Any system that exposes governance decisions derived from the Licensed Work to third parties is prohibited without a commercial license.
+
+-----
+
+## Change License Transition
+
+On or after the Change Date, the Licensor may elect to make a specific version of the Licensed Work available under the Apache License, Version 2.0. Such election must be made in writing and published in the same repository or distribution channel as the Licensed Work. Until such election is made, this License governs in full.
+
+-----
+
+## Compliance Requirement
+
+If your use of the Licensed Work does not comply with this License, you must:
+
+- obtain a commercial license from the Licensor, or
+- immediately cease all use of the Licensed Work
+
+Violation results in automatic termination of rights under this License for all versions of the Licensed Work.
+
+-----
+
+## Distribution
+
+All copies of the Licensed Work, including modified and derivative versions, must:
+
+- include this License in full
+- retain all copyright notices
+
+This License applies separately to each version of the Licensed Work.
+
+-----
+
+## Notice
+
+If you distribute the Licensed Work or any derivative, you must include the following notice in a prominent location in the documentation or source:
+
+> This software is licensed under the Business Source License 1.1 (Modified — M87 Spine Governance License v1.0). Production use is permitted for internal deployment only. Commercial Governance Service use is prohibited. See LICENSE for full terms.
+
+-----
+
+## Trademark
+
+This License does not grant any rights to use the trademarks, service marks, or logos of M87 Studio LLC, except as required to reproduce this License.
+
+-----
+
+## Warranty Disclaimer
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO:
+
+- MERCHANTABILITY
+- FITNESS FOR A PARTICULAR PURPOSE
+- NON-INFRINGEMENT
+- TITLE
+
+-----
+
+## License Text Usage
+
+Permission is granted to use the text of the Business Source License 1.1 to license your own works.

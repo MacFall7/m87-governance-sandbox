@@ -11,6 +11,9 @@ A pure-function state machine that proves 7 architectural invariants hold under 
 
 Built by [M87 Studio](https://m87studio.net) to verify governance guarantees before they reach production.
 
+> **Repository role:** Reference/conformance test harness — a standalone TypeScript state machine that proves 7 governance invariants hold under 22 adversarial injection scenarios. Not a runtime kernel; doesn't share code or a wire format with [spine-lite-python](https://github.com/MacFall7/spine-lite-python), [M87-Spine-lite](https://github.com/MacFall7/M87-Spine-lite), or [m87-governed-swarm](https://github.com/MacFall7/m87-governed-swarm) — it's an independent proof of the same architectural pattern.
+> **Status:** CI-green, frozen failure matrix (`src/core/failureMatrix.ts`, `src/core/injections.ts`).
+
 **Proof entry point:** [`test/governanceReducer.test.ts`](./test/governanceReducer.test.ts) — runs every injection from the frozen failure matrix against the reducer and asserts the correct escalation fires.
 
 ## What It Proves

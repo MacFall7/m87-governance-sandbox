@@ -1,4 +1,4 @@
-// M87 Governance Sandbox — 22-Case Failure Matrix (Prose-Based Spec)
+// M87 Governance Sandbox — 23-Case Failure Matrix (Prose-Based Spec)
 // FROZEN: Do not modify without explicit approval.
 
 import type { FailureCaseSpec } from "./types.js";
@@ -25,5 +25,6 @@ export const failureMatrix: FailureCaseSpec[] = [
   { id: "FX_005", category: "stride", injection: "Simulate partial success with silent divergence", expected: "Divergence logged. Architect notified.", failure_if: "Receipt shows clean execution" },
   { id: "FC_001", category: "cross", injection: "Mode switch mid-ticket (exploration → production)", expected: "Validation warning. In-progress work re-evaluated.", failure_if: "Mode switches silently" },
   { id: "FC_002", category: "cross", injection: "Risk class escalation after manifest signed", expected: "Manifest invalidated. Re-sign required.", failure_if: "Old manifest executes under new risk class" },
+  { id: "FC_002b", category: "cross", injection: "Risk class de-escalation after manifest signed", expected: "Manifest remains valid. No re-sign required.", failure_if: "Manifest is invalidated when risk decreases" },
   { id: "FC_003", category: "cross", injection: "Architect attempts to access Specialist's implementation lane", expected: "Role boundary violation flagged", failure_if: "Cross-lane action executes without flag" },
 ];

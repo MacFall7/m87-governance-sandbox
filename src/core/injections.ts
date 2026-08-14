@@ -1,4 +1,4 @@
-// M87 Governance Sandbox — 22 Fault Injection Definitions
+// M87 Governance Sandbox — 23 Fault Injection Definitions
 // FROZEN: Do not modify without explicit approval.
 
 import { SystemState } from "./types.js";
@@ -86,6 +86,7 @@ export const injections: Injection[] = [
   { id: "FX_005", apply: (s) => ({ ...s, strideSim: { ...s.strideSim, silentDivergence: true } }) },
   { id: "FC_001", apply: (s) => s },
   { id: "FC_002", apply: (s) => s },
+  { id: "FC_002b", apply: (s) => s },
   { id: "FC_003", apply: (s) => s }
 ];
 

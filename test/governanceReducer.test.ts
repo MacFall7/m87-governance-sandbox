@@ -66,8 +66,8 @@ function stateWithManifest() {
 }
 
 describe("Matrix sanity", () => {
-  it("failureMatrix count matches provided spec (22)", () => {
-    expect(failureMatrix.length).toBe(22);
+  it("failureMatrix count matches approved spec (23)", () => {
+    expect(failureMatrix.length).toBe(23);
   });
 });
 
@@ -245,6 +245,23 @@ describe("Failure injection matrix tests", () => {
     expect(s.state).toBe("BLOCKED");
     expect(s.manifest).toBe(null);
     expect(s.escalations.some((e) => e.trigger === "risk_escalation_requires_resign")).toBe(true);
+  });
+
+  it("FC_002b — Risk decrease after manifest exists → manifest remains valid", () => {
+    const ticket = seedTicket();
+    ticket.risk_class = "medium";
+    const manifest = seedManifest();
+    manifest.risk_class = "medium";
+
+    let s = cleanState();
+    s = governanceReducer(s, { type: "ARCHITECT_SUBMIT_TICKET", payload: ticket });
+    s = governanceReducer(s, { type: "SPECIALIST_SUBMIT_MANIFEST", payload: manifest });
+    s = governanceReducer(s, { type: "ARCHITECT_SET_RISK", payload: { risk: "low" } });
+
+    expect(s.state).toBe("IN_PROGRESS");
+    expect(s.manifest).toBe(manifest);
+    expect(s.riskClass).toBe("low");
+    expect(s.escalations.some((e) => e.trigger === "risk_escalation_requires_resign")).toBe(false);
   });
 
   it("FC_003 — Architect enters Specialist lane → violation flagged", () => {
